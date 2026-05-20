@@ -1,0 +1,164 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const joi_1 = __importDefault(require("joi"));
+const auth_service_1 = require("./auth.service");
+const logger_1 = require("../../shared/utils/logger");
+const types_1 = require("../../shared/types");
+const asyncHandler_1 = require("../../shared/middleware/asyncHandler");
+const router = (0, express_1.Router)();
+const signupSchema = joi_1.default.object({
+    email: joi_1.default.string().email().required(),
+    password: joi_1.default.string().min(6).required(),
+    name: joi_1.default.string().min(2).max(100).required(),
+    timezone: joi_1.default.string().optional(),
+});
+const loginSchema = joi_1.default.object({
+    email: joi_1.default.string().email().required(),
+    password: joi_1.default.string().required(),
+});
+const refreshTokenSchema = joi_1.default.object({
+    refreshToken: joi_1.default.string().required(),
+});
+const optionalRefreshTokenSchema = joi_1.default.object({
+    refreshToken: joi_1.default.string().optional(),
+});
+const changePasswordSchema = joi_1.default.object({
+    currentPassword: joi_1.default.string().required(),
+    newPassword: joi_1.default.string().min(6).required(),
+});
+const forgotPasswordSchema = joi_1.default.object({
+    email: joi_1.default.string().email().required(),
+});
+const verifyOTPSchema = joi_1.default.object({
+    email: joi_1.default.string().email().required(),
+    otp: joi_1.default.string().length(6).pattern(/^\d+$/).required(),
+});
+const resetPasswordSchema = joi_1.default.object({
+    token: joi_1.default.string().uuid().required(),
+    newPassword: joi_1.default.string().min(6).required(),
+});
+// POST /api/v1/auth/signup
+router.post('/signup', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    logger_1.logger.info('Signup request', { email: req.body?.email, ip: req.ip });
+    const { error, value } = signupSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    const result = await auth_service_1.AuthService.signup(value);
+    res.status(201).json({
+        success: true,
+        data: result,
+        message: 'User created successfully',
+    });
+}));
+// POST /api/v1/auth/login
+router.post('/login', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    logger_1.logger.info('Login request', { email: req.body?.email, ip: req.ip });
+    const { error, value } = loginSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    const result = await auth_service_1.AuthService.login(value);
+    res.json({
+        success: true,
+        data: result,
+        message: 'Login successful',
+    });
+}));
+// POST /api/v1/auth/refresh
+router.post('/refresh', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { error, value } = refreshTokenSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    const tokens = await auth_service_1.AuthService.refreshToken(value.refreshToken);
+    res.json({
+        success: true,
+        data: tokens,
+        message: 'Tokens refreshed successfully',
+    });
+}));
+// POST /api/v1/auth/logout
+router.post('/logout', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { error, value } = optionalRefreshTokenSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    if (value.refreshToken) {
+        await auth_service_1.AuthService.logout(value.refreshToken);
+    }
+    res.json({
+        success: true,
+        message: 'Logout successful',
+    });
+}));
+// POST /api/v1/auth/logout-all
+router.post('/logout-all', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const userId = req.user?.id;
+    if (!userId) {
+        throw new types_1.ValidationError('User not authenticated');
+    }
+    await auth_service_1.AuthService.logoutAll(userId);
+    res.json({
+        success: true,
+        message: 'Logged out from all devices',
+    });
+}));
+// POST /api/v1/auth/change-password
+router.post('/change-password', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const userId = req.user?.id;
+    if (!userId) {
+        throw new types_1.ValidationError('User not authenticated');
+    }
+    const { error, value } = changePasswordSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    await auth_service_1.AuthService.changePassword(userId, value.currentPassword, value.newPassword);
+    res.json({
+        success: true,
+        message: 'Password changed successfully',
+    });
+}));
+// POST /api/v1/auth/forgot-password
+router.post('/forgot-password', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { error, value } = forgotPasswordSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    await auth_service_1.AuthService.requestPasswordReset(value.email);
+    res.json({
+        success: true,
+        message: 'If an account with that email exists, an OTP has been sent to your email.',
+    });
+}));
+// POST /api/v1/auth/verify-otp
+router.post('/verify-otp', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { error, value } = verifyOTPSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    const token = await auth_service_1.AuthService.verifyPasswordResetOTP(value.email, value.otp);
+    res.json({
+        success: true,
+        data: { token },
+        message: 'OTP verified successfully. You can now reset your password.',
+    });
+}));
+// POST /api/v1/auth/reset-password
+router.post('/reset-password', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { error, value } = resetPasswordSchema.validate(req.body);
+    if (error) {
+        throw new types_1.ValidationError(error.details[0].message);
+    }
+    await auth_service_1.AuthService.resetPassword(value.token, value.newPassword);
+    res.json({
+        success: true,
+        message: 'Password reset successfully. Please login with your new password.',
+    });
+}));
+exports.default = router;

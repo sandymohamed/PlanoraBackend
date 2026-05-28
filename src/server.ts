@@ -1,6 +1,7 @@
 import './shared/utils/expressAsyncPatch';
 import { createApp } from './app';
 import { env } from './config/env';
+import { validateProductionEnv } from './config/envValidation';
 import { connectDatabase } from './shared/utils/database';
 import { connectRedis } from './shared/utils/redis';
 import { initializeQueues } from './infrastructure/queue/queue.service';
@@ -10,6 +11,7 @@ import { shutdownPostHog } from './infrastructure/analytics/posthog';
 const app = createApp();
 
 async function bootstrap() {
+  validateProductionEnv();
   await connectDatabase();
   try {
     await connectRedis();

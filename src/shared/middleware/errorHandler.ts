@@ -32,9 +32,15 @@ export const errorHandler = (
     message = 'Token expired';
     code = 'TOKEN_EXPIRED';
   } else if (error.name === 'PrismaClientKnownRequestError') {
-    statusCode = 400;
-    message = 'Database operation failed';
-    code = 'DATABASE_ERROR';
+    const prismaCode = (error as { code?: string }).code;
+    const isUnavailable =
+      prismaCode === 'P1001' ||
+      prismaCode === 'P1002' ||
+      prismaCode === 'P1017' ||
+      (error.message && error.message.includes("Can't reach database server"));
+    statusCode = isUnavailable ? 503 : 400;
+    message = isUnavailable ? 'Database temporarily unavailable' : 'Database operation failed';
+    code = isUnavailable ? 'SERVICE_UNAVAILABLE' : 'DATABASE_ERROR';
   }
 
   if (statusCode >= 500) {

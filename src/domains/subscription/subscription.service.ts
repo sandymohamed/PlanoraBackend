@@ -2,6 +2,7 @@ import { SubscriptionTier } from '@prisma/client';
 import { getPrismaClient } from '../../shared/utils/database';
 import { env } from '../../config/env';
 import { AuthorizationError } from '../../shared/types';
+import { getMonthlyAIQuota, getLimitsForTier } from './subscription.planHelpers';
 
 export class SubscriptionService {
   async getOrCreate(userId: string) {
@@ -51,11 +52,21 @@ export class SubscriptionService {
       where: { userId, createdAt: { gte: startOfMonth } },
     });
 
-    if (usage >= env.freemium.freeMaxAiPerMonth) {
+    const monthlyCap = getMonthlyAIQuota(sub.tier);
+    const envCap = env.freemium.freeMaxAiPerMonth;
+    const limit = Math.min(monthlyCap, envCap);
+
+    if (usage >= limit) {
       throw new AuthorizationError(
-        `Free plan includes ${env.freemium.freeMaxAiPerMonth} AI generations per month. Upgrade for unlimited AI planning.`
+        `Free plan includes ${limit} AI generations per month. Upgrade for unlimited AI planning.`
       );
     }
+  }
+
+  /** Daily AI quota helper for future per-day enforcement */
+  getAIQuotaForUser(tier: SubscriptionTier) {
+    const plan = tier === SubscriptionTier.PREMIUM ? 'PREMIUM' : 'FREE';
+    return getLimitsForTier(plan);
   }
 
   async logAIUsage(userId: string, action: string, tokens?: number): Promise<void> {

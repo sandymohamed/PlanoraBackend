@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { getPrismaClient } from '../../shared/utils/database';
+import { getPrismaClient, executeWithRetry } from '../../shared/utils/database';
 import { AuthenticatedRequest, JWTPayload, AuthenticationError } from '../../shared/types';
 
 export const authenticateToken = async (
@@ -20,18 +20,23 @@ export const authenticateToken = async (
     // Decoded token is used below to fetch user
     // Get user from database
     const prisma = getPrismaClient();
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        timezone: true,
-        settings: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    const user = await executeWithRetry(
+      () =>
+        prisma.user.findUnique({
+          where: { id: decoded.userId },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            timezone: true,
+            settings: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+      3,
+      500
+    );
 
     if (!user) {
       throw new AuthenticationError('User not found');

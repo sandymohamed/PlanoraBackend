@@ -86,7 +86,8 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
       goal.title,
       goal.description || '',
       goal.targetDate?.toISOString() || new Date().toISOString(),
-      promptOptions
+      promptOptions,
+      userId
     );
 
     // Create milestones and tasks in the database
@@ -251,8 +252,18 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
     logger.error('AI plan generation error:', error);
     
     // Return error response instead of throwing
-    const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
+    let errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
     const statusCode = error instanceof ValidationError ? 400 : 500;
+
+    if (
+      errorMessage.includes('UNABLE_TO_VERIFY_LEAF_SIGNATURE') ||
+      errorMessage.includes('certificate')
+    ) {
+      errorMessage =
+        'OpenAI TLS connection failed. Restart the backend after setting OPENAI_API_KEY, or on Windows dev use default TLS settings (see PlanoraBackend .env.example).';
+    } else if (errorMessage.includes('Connection error') && !process.env.OPENAI_API_KEY) {
+      errorMessage = 'OPENAI_API_KEY is not configured on the server.';
+    }
     
     return res.status(statusCode).json({
       success: false,

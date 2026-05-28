@@ -1,6 +1,15 @@
 import OpenAI from 'openai';
 import { logger } from '../../shared/utils/logger';
+import { createDevHttpsAgent } from '../../shared/utils/httpAgent';
 import { GeneratedPlan, GeneratedMilestone, GeneratedTask } from '../../shared/types';
+import { generateCacheKey, getCachedPlan, setCachedPlan } from './ai.cache';
+import { checkAiDailyLimit } from './ai.limits';
+import { generateOfflinePlan } from './ai.offline';
+import {
+  computeDurationDays,
+  computeHoursPerDay,
+  resolveGenerationMode,
+} from './ai.strategy';
 
 class AIService {
   private static instance: AIService;
@@ -8,8 +17,15 @@ class AIService {
   private model: string;
 
   constructor() {
+    const httpAgent = createDevHttpsAgent();
+    if (httpAgent) {
+      logger.warn(
+        'OpenAI TLS: certificate verification disabled in development. Set OPENAI_TLS_REJECT_UNAUTHORIZED=true in production.'
+      );
+    }
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      httpAgent: httpAgent,
     });
     this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   }
@@ -21,177 +37,114 @@ class AIService {
     return AIService.instance;
   }
 
+  /**
+   * Hybrid plan generation: cache → online (if allowed) → offline fallback.
+   * Always returns a plan; never throws on OpenAI quota/network failures.
+   */
   async generatePlan(
     goalTitle: string,
-    goalDescription: string,
+    _goalDescription: string,
     targetDate: string,
     options: {
       intensity?: 'low' | 'medium' | 'high';
       weeklyHours?: number;
       language?: 'en' | 'ar';
       tone?: 'supportive' | 'professional' | 'casual';
-    } = {}
+    } = {},
+    userId?: string
   ): Promise<GeneratedPlan> {
-    try {
-      const {
-        intensity = 'medium',
-        weeklyHours = 10,
-        language = 'en',
-        tone = 'supportive',
-      } = options;
+    const weeklyHours = options.weeklyHours ?? 10;
+    const durationDays = computeDurationDays(targetDate);
+    const hoursPerDay = computeHoursPerDay(weeklyHours);
+    const goal = goalTitle.trim() || 'Goal';
 
-      const prompt = this.buildPrompt(goalTitle, goalDescription, targetDate, {
-        intensity,
-        weeklyHours,
-        language,
-        tone,
-      });
-
-      const response = await this.openai.chat.completions.create({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content: this.getSystemPrompt(language),
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.7,
-        max_tokens: 2000,
-      });
-
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('No response from OpenAI');
-      }
-
-      return this.parseResponse(content);
-    } catch (error) {
-      logger.error('Failed to generate AI plan:', error);
-
-      // Handle specific OpenAI errors
-      if ((error as any)?.code === 'model_not_found' || (error as any)?.status === 404) {
-        const fallbackMessage = `OpenAI model "${this.model}" is unavailable. Set OPENAI_MODEL to a valid model (e.g. "gpt-4o-mini") or verify your API access.`;
-        throw new Error(fallbackMessage);
-      }
-
-      // Re-throw parse errors as-is (they already have meaningful messages from parseResponse)
-      if (error instanceof Error && (error.message.includes('parse') || error.message.includes('Invalid response format') || error.message.includes('JSON'))) {
-        throw error;
-      }
-
-      // Wrap other errors with a user-friendly message
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      throw new Error(`AI service error: ${errorMessage}`);
+    const cacheKey = generateCacheKey({ goal, durationDays, hoursPerDay });
+    const cached = getCachedPlan(cacheKey);
+    if (cached) {
+      return cached;
     }
+
+    const limit = userId ? checkAiDailyLimit(userId, false) : { forceOffline: false, allowed: true, count: 0, limit: 10 };
+    const hasApiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+    const mode = resolveGenerationMode({
+      cacheHit: false,
+      forceOffline: limit.forceOffline,
+      hasApiKey,
+    });
+
+    let plan: GeneratedPlan;
+
+    if (mode === 'offline') {
+      plan = generateOfflinePlan({ goal, durationDays, hoursPerDay });
+    } else {
+      try {
+        if (userId) {
+          checkAiDailyLimit(userId, true);
+        }
+        plan = await this.generatePlanOnline({
+          goal,
+          durationDays,
+          hoursPerDay,
+          language: options.language ?? 'en',
+        });
+        logger.info('[AI OPENAI SUCCESS]', { goal: goal.substring(0, 60), durationDays, hoursPerDay });
+      } catch (error) {
+        logger.warn('[AI FALLBACK TRIGGERED]', {
+          error: error instanceof Error ? error.message : String(error),
+          goal: goal.substring(0, 60),
+        });
+        plan = generateOfflinePlan({ goal, durationDays, hoursPerDay });
+      }
+    }
+
+    setCachedPlan(cacheKey, plan);
+    return plan;
   }
 
-  private buildPrompt(
-    goalTitle: string,
-    goalDescription: string,
-    targetDate: string,
-    options: {
-      intensity: string;
-      weeklyHours: number;
-      language: string;
-      tone: string;
-    }
-  ): string {
-    const { intensity, weeklyHours, language, tone } = options;
+  /** Minimal-token OpenAI call — only goal, duration, hoursPerDay */
+  private async generatePlanOnline(input: {
+    goal: string;
+    durationDays: number;
+    hoursPerDay: number;
+    language: string;
+  }): Promise<GeneratedPlan> {
+    const system =
+      input.language === 'ar'
+        ? 'مخطط أهداف. JSON فقط: milestones[{title,target_date,duration_days,description}], tasks[{title,milestone_index,due_offset_days,duration_minutes,description}], notes.'
+        : 'Goal planner. JSON only: milestones[{title,target_date,duration_days,description}], tasks[{title,milestone_index,due_offset_days,duration_minutes,description}], notes.';
 
-    if (language === 'ar') {
-      return `
-الهدف: "${goalTitle}"
-الوصف: "${goalDescription}"
-التاريخ المستهدف: ${targetDate}
-الكثافة: ${intensity}
-الساعات الأسبوعية: ${weeklyHours}
-النبرة: ${tone}
+    const user = JSON.stringify({
+      goal: input.goal,
+      durationDays: input.durationDays,
+      hoursPerDay: input.hoursPerDay,
+    });
 
-يرجى إنشاء خطة مفصلة لتحقيق هذا الهدف مع:
-- معالم واضحة وقابلة للقياس
-- مهام عملية ومحددة
-- جدول زمني واقعي
-- تذكيرات مناسبة
-- ملاحظات مفيدة
+    const response = await this.openai.chat.completions.create({
+      model: this.model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature: 0.6,
+      max_tokens: 1200,
+      response_format: { type: 'json_object' },
+    });
 
-تأكد من أن الخطة مناسبة للمستوى المطلوب والوقت المتاح.
-      `.trim();
-    }
-
-    return `
-Goal: "${goalTitle}"
-Description: "${goalDescription}"
-Target Date: ${targetDate}
-Intensity: ${intensity}
-Weekly Hours: ${weeklyHours}
-Tone: ${tone}
-
-Please create a detailed plan to achieve this goal with:
-- Clear, measurable milestones
-- Practical, specific tasks
-- Realistic timeline
-- Appropriate reminders
-- Helpful notes
-
-Make sure the plan is suitable for the requested level and available time.
-    `.trim();
-  }
-
-  private getSystemPrompt(language: string): string {
-    if (language === 'ar') {
-      return `
-أنت خبير في التخطيط الشخصي والمهني. مهمتك هي تحويل الأهداف إلى خطط عمل مفصلة ومنظمة.
-
-يجب أن ترد دائماً بصيغة JSON صالحة مع المفاتيح التالية:
-- "milestones": مصفوفة من المعالم مع {title, target_date (تنسيق ISO YYYY-MM-DD), duration_days (كبديل), description, tasks}
-- "tasks": مصفوفة مسطحة من المهام مع {title, milestone_index, due_offset_days, duration_minutes, recurrence, description}
-- "notes": نص مفيد إضافي
-
-قواعد مهمة:
-1. اجعل المهام عملية وقابلة للتنفيذ
-2. استخدم فترات زمنية واقعية
-3. رتب المهام بترتيب منطقي
-4. أضف تذكيرات مناسبة للمهام المهمة
-5. استخدم نبرة داعمة ومحفزة
-6. تأكد من أن الخطة قابلة للتحقيق في الوقت المحدد
-7. للمعالم: قدم target_date بتنسيق ISO (YYYY-MM-DD) لكل معلم. يجب توزيع التواريخ بالتساوي من اليوم حتى تاريخ الهدف. يجب أن ينتهي آخر معلم في تاريخ الهدف أو قبله.
-      `.trim();
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error('No response from OpenAI');
     }
 
-    return `
-You are an expert personal and professional planner. Your task is to convert goals into detailed, structured action plans.
-
-You must always respond with valid JSON format containing these keys:
-- "milestones": array of milestones with {title, target_date (ISO format YYYY-MM-DD), duration_days (as fallback), description, tasks}
-- "tasks": flattened array of tasks with {title, milestone_index, due_offset_days, duration_minutes, recurrence, description}
-- "notes": additional helpful text
-
-Important rules:
-1. Make tasks practical and actionable
-2. Use realistic timeframes
-3. Order tasks in logical sequence
-4. Add appropriate reminders for important tasks
-5. Use supportive and motivating tone
-6. Ensure the plan is achievable within the given timeframe
-7. For milestones: Provide target_date in ISO format (YYYY-MM-DD) for each milestone. Dates should be distributed evenly from today to the goal target date. The last milestone should end on or before the goal target date.
-    `.trim();
+    return this.parseResponse(content);
   }
 
   private parseResponse(content: string): GeneratedPlan {
     try {
-      // Clean the response to extract JSON - try multiple strategies
       let jsonString = '';
-      
-      // Strategy 1: Try to find JSON object in the response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         jsonString = jsonMatch[0];
       } else {
-        // Strategy 2: Try to find JSON array
         const arrayMatch = content.match(/\[[\s\S]*\]/);
         if (arrayMatch) {
           jsonString = `{"data": ${arrayMatch[0]}}`;
@@ -200,50 +153,33 @@ Important rules:
         }
       }
 
-      // Try to fix common JSON issues before parsing
-      let cleanedJson = jsonString
-        // Remove trailing commas before closing brackets/braces
-        .replace(/,(\s*[}\]])/g, '$1')
-        // Fix single quotes to double quotes (basic cases)
-        .replace(/'/g, '"');
+      let cleanedJson = jsonString.replace(/,(\s*[}\]])/g, '$1').replace(/'/g, '"');
 
       let parsed;
       try {
         parsed = JSON.parse(cleanedJson);
-      } catch (parseError) {
-        // If cleaning didn't work, try original string
-        try {
-          parsed = JSON.parse(jsonString);
-        } catch (secondError) {
-          logger.error('JSON parse error details:', {
-            originalError: parseError,
-            cleanedError: secondError,
-            jsonLength: jsonString.length,
-            preview: jsonString.substring(0, 500)
-          });
-          throw new Error('Failed to parse JSON response from AI');
-        }
+      } catch {
+        parsed = JSON.parse(jsonString);
       }
 
-      // Validate and structure the response
-      const plan: GeneratedPlan = {
+      return {
         milestones: this.validateMilestones(parsed.milestones || parsed.data?.milestones || []),
         tasks: this.validateTasks(parsed.tasks || parsed.data?.tasks || []),
         notes: parsed.notes || parsed.data?.notes || '',
       };
-
-      return plan;
     } catch (error) {
       logger.error('Failed to parse AI response:', error);
-      throw new Error(`Invalid response format from AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Invalid response format from AI: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
   private validateMilestones(milestones: any[]): GeneratedMilestone[] {
     return milestones.map((milestone, index) => ({
       title: milestone.title || `Milestone ${index + 1}`,
-      durationDays: Math.max(1, parseInt(milestone.duration_days) || 7), // Fallback
-      targetDate: milestone.target_date || milestone.targetDate || undefined, // AI-generated date
+      durationDays: Math.max(1, parseInt(milestone.duration_days) || 7),
+      targetDate: milestone.target_date || milestone.targetDate || undefined,
       description: milestone.description || '',
       tasks: milestone.tasks || [],
     }));
@@ -260,89 +196,12 @@ Important rules:
     }));
   }
 
-  // Generate a simple plan for testing
-  async generateSimplePlan(_goalTitle: string): Promise<GeneratedPlan> {
-    return {
-      milestones: [
-        {
-          title: 'Getting Started',
-          durationDays: 7,
-          description: 'Initial setup and planning phase',
-          tasks: ['Research and gather information', 'Set up tools and resources'],
-        },
-        {
-          title: 'Core Development',
-          durationDays: 21,
-          description: 'Main work phase',
-          tasks: ['Implement core features', 'Test and iterate'],
-        },
-        {
-          title: 'Finalization',
-          durationDays: 7,
-          description: 'Completion and review',
-          tasks: ['Final testing', 'Documentation', 'Deployment'],
-        },
-      ],
-      tasks: [
-        {
-          title: 'Research and gather information',
-          milestoneIndex: 0,
-          dueOffsetDays: 1,
-          durationMinutes: 120,
-          recurrence: undefined,
-          description: 'Spend time researching the topic thoroughly',
-        },
-        {
-          title: 'Set up tools and resources',
-          milestoneIndex: 0,
-          dueOffsetDays: 3,
-          durationMinutes: 90,
-          recurrence: undefined,
-          description: 'Prepare all necessary tools and resources',
-        },
-        {
-          title: 'Implement core features',
-          milestoneIndex: 1,
-          dueOffsetDays: 1,
-          durationMinutes: 180,
-          recurrence: 'RRULE:FREQ=DAILY;COUNT=14',
-          description: 'Work on the main features daily',
-        },
-        {
-          title: 'Test and iterate',
-          milestoneIndex: 1,
-          dueOffsetDays: 15,
-          durationMinutes: 120,
-          recurrence: 'RRULE:FREQ=WEEKLY;COUNT=3',
-          description: 'Regular testing and improvement cycles',
-        },
-        {
-          title: 'Final testing',
-          milestoneIndex: 2,
-          dueOffsetDays: 1,
-          durationMinutes: 240,
-          recurrence: undefined,
-          description: 'Comprehensive final testing',
-        },
-        {
-          title: 'Documentation',
-          milestoneIndex: 2,
-          dueOffsetDays: 3,
-          durationMinutes: 120,
-          recurrence: undefined,
-          description: 'Create comprehensive documentation',
-        },
-        {
-          title: 'Deployment',
-          milestoneIndex: 2,
-          dueOffsetDays: 5,
-          durationMinutes: 90,
-          recurrence: undefined,
-          description: 'Deploy the final solution',
-        },
-      ],
-      notes: 'This is a sample plan. Adjust the timeline and tasks based on your specific needs and available time.',
-    };
+  async generateSimplePlan(goalTitle: string): Promise<GeneratedPlan> {
+    return generateOfflinePlan({
+      goal: goalTitle,
+      durationDays: 21,
+      hoursPerDay: 1.5,
+    });
   }
 
   /** Motivational weekly review copy for shareable cards */
@@ -356,33 +215,34 @@ Important rules:
     recommendations: string[];
     shareableSummary: string;
   }> {
-    const prompt = `You are Planora AI, a warm productivity coach. Given weekly stats:
-- Completed tasks: ${stats.completedTasks}
-- Missed tasks: ${stats.missedTasks}
-- Consistency score: ${stats.consistencyScore}%
-- Best days: ${JSON.stringify(stats.bestDays)}
-
-Respond ONLY with JSON:
-{"insights":["..."],"recommendations":["..."],"shareableSummary":"one inspiring sentence for social sharing"}`;
+    const prompt = JSON.stringify({
+      completed: stats.completedTasks,
+      missed: stats.missedTasks,
+      consistency: stats.consistencyScore,
+      bestDays: stats.bestDays,
+    });
 
     try {
       const response = await this.openai.chat.completions.create({
         model: this.model,
         messages: [
-          { role: 'system', content: 'Supportive, motivating, not robotic. JSON only.' },
+          { role: 'system', content: 'Coach. JSON only: insights[], recommendations[], shareableSummary.' },
           { role: 'user', content: prompt },
         ],
         temperature: 0.8,
-        max_tokens: 600,
+        max_tokens: 400,
+        response_format: { type: 'json_object' },
       });
       const content = response.choices[0]?.message?.content || '{}';
       const parsed = JSON.parse(content.replace(/```json|```/g, '').trim());
+      logger.info('[AI OPENAI SUCCESS]', { feature: 'weeklyReview' });
       return {
         insights: parsed.insights || [],
         recommendations: parsed.recommendations || [],
         shareableSummary: parsed.shareableSummary || '',
       };
     } catch {
+      logger.warn('[AI FALLBACK TRIGGERED]', { feature: 'weeklyReview' });
       return {
         insights: ['You showed up this week — that matters.'],
         recommendations: ['Choose one focus block tomorrow morning.'],
@@ -393,4 +253,3 @@ Respond ONLY with JSON:
 }
 
 export const aiService = AIService.getInstance();
-

@@ -52,7 +52,11 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     if (status) {
-      where.status = status;
+      const statuses = String(status)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      where.status = statuses.length > 1 ? { in: statuses } : statuses[0];
     }
 
     const [goals, total] = await executeWithRetry(async () => {

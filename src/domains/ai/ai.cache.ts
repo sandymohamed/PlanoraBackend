@@ -7,6 +7,8 @@ export interface CacheKeyInput {
   goal: string;
   durationDays: number;
   hoursPerDay: number;
+  /** Subscription tier — lets tiers receive different plans (defaults to free) */
+  tier?: string;
 }
 
 interface CacheEntry {
@@ -16,10 +18,15 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
-/** Normalize goal text for stable cache keys */
+/**
+ * Normalize goal text for stable cache keys.
+ * Note: userId is intentionally excluded so identical goals are shared across
+ * users — this maximizes cache hits and minimizes free-tier token usage.
+ */
 export function generateCacheKey(input: CacheKeyInput): string {
   const goal = input.goal.trim().toLowerCase().replace(/\s+/g, ' ');
-  return `${goal}|${input.durationDays}|${input.hoursPerDay}`;
+  const tier = (input.tier ?? 'free').toLowerCase();
+  return `${goal}|${input.durationDays}|${input.hoursPerDay}|${tier}`;
 }
 
 export function getCachedPlan(key: string): GeneratedPlan | null {

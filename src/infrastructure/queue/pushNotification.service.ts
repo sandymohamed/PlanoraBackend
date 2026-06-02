@@ -116,7 +116,9 @@ class PushNotificationService {
     const isAlarmTrigger = data.notificationType === 'ALARM_TRIGGER' || data.type === 'alarm';
     const isReminderType =
       data.type === 'TASK_REMINDER' || data.type === 'DUE_DATE_REMINDER' || data.type === 'ROUTINE_REMINDER';
-    const channelId = isAlarmTrigger || isReminderType ? 'alarm-channel-v2' : 'default-channel-id';
+    // 'alarm_channel' is created natively (AlarmPlayerService) and registered as the
+    // FCM default channel in AndroidManifest, so it always exists on the device.
+    const channelId = 'alarm_channel';
 
     let successCount = 0;
     for (const tokenInfo of tokens) {

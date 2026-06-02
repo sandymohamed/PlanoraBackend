@@ -1,6 +1,4 @@
-import OpenAI from 'openai';
 import { logger } from '../../shared/utils/logger';
-import { createDevHttpsAgent } from '../../shared/utils/httpAgent';
 import { GeneratedPlan, GeneratedMilestone, GeneratedTask } from '../../shared/types';
 import { generateCacheKey, getCachedPlan, setCachedPlan } from './ai.cache';
 import { checkAiDailyLimit } from './ai.limits';
@@ -10,25 +8,12 @@ import {
   computeHoursPerDay,
   resolveGenerationMode,
 } from './ai.strategy';
+import { getAIProvider } from './providers/provider.factory';
+import { buildPlanMessages, buildWeeklyReviewMessages } from './ai.prompts';
+import { AI_CONSTANTS } from './ai.constants';
 
 class AIService {
   private static instance: AIService;
-  private openai: OpenAI;
-  private model: string;
-
-  constructor() {
-    const httpAgent = createDevHttpsAgent();
-    if (httpAgent) {
-      logger.warn(
-        'OpenAI TLS: certificate verification disabled in development. Set OPENAI_TLS_REJECT_UNAUTHORIZED=true in production.'
-      );
-    }
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      httpAgent: httpAgent,
-    });
-    this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  }
 
   static getInstance(): AIService {
     if (!AIService.instance) {
@@ -38,8 +23,8 @@ class AIService {
   }
 
   /**
-   * Hybrid plan generation: cache → online (if allowed) → offline fallback.
-   * Always returns a plan; never throws on OpenAI quota/network failures.
+   * Hybrid plan generation: cache → provider (if allowed) → offline fallback.
+   * Always returns a plan; never throws on provider quota/network failures.
    */
   async generatePlan(
     goalTitle: string,
@@ -50,6 +35,8 @@ class AIService {
       weeklyHours?: number;
       language?: 'en' | 'ar';
       tone?: 'supportive' | 'professional' | 'casual';
+      /** Subscription tier — part of the cache key (defaults to free) */
+      tier?: string;
     } = {},
     userId?: string
   ): Promise<GeneratedPlan> {
@@ -57,85 +44,83 @@ class AIService {
     const durationDays = computeDurationDays(targetDate);
     const hoursPerDay = computeHoursPerDay(weeklyHours);
     const goal = goalTitle.trim() || 'Goal';
+    const tier = options.tier ?? 'free';
 
-    const cacheKey = generateCacheKey({ goal, durationDays, hoursPerDay });
+    const cacheKey = generateCacheKey({ goal, durationDays, hoursPerDay, tier });
     const cached = getCachedPlan(cacheKey);
     if (cached) {
       return cached;
     }
 
     const limit = userId ? checkAiDailyLimit(userId, false) : { forceOffline: false, allowed: true, count: 0, limit: 10 };
-    const hasApiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+    const provider = getAIProvider();
     const mode = resolveGenerationMode({
       cacheHit: false,
       forceOffline: limit.forceOffline,
-      hasApiKey,
+      hasApiKey: provider !== null,
     });
 
-    let plan: GeneratedPlan;
-
     if (mode === 'offline') {
-      plan = generateOfflinePlan({ goal, durationDays, hoursPerDay });
-    } else {
-      try {
-        if (userId) {
-          checkAiDailyLimit(userId, true);
-        }
-        plan = await this.generatePlanOnline({
-          goal,
-          durationDays,
-          hoursPerDay,
-          language: options.language ?? 'en',
-        });
-        logger.info('[AI OPENAI SUCCESS]', { goal: goal.substring(0, 60), durationDays, hoursPerDay });
-      } catch (error) {
-        logger.warn('[AI FALLBACK TRIGGERED]', {
-          error: error instanceof Error ? error.message : String(error),
-          goal: goal.substring(0, 60),
-        });
-        plan = generateOfflinePlan({ goal, durationDays, hoursPerDay });
-      }
+      // Offline plans are deterministic and cheap — intentionally not cached so
+      // the next request can use the provider once quota/availability returns.
+      return generateOfflinePlan({ goal, durationDays, hoursPerDay });
     }
 
-    setCachedPlan(cacheKey, plan);
-    return plan;
+    try {
+      if (userId) {
+        checkAiDailyLimit(userId, true);
+      }
+      const plan = await this.generatePlanOnline({
+        goal,
+        durationDays,
+        hoursPerDay,
+        language: options.language ?? 'en',
+      });
+      // Cache successful provider responses only.
+      setCachedPlan(cacheKey, plan);
+      return plan;
+    } catch (error) {
+      logger.warn('[AI FALLBACK TRIGGERED]', {
+        error: error instanceof Error ? error.message : String(error),
+        goal: goal.substring(0, 60),
+      });
+      return generateOfflinePlan({ goal, durationDays, hoursPerDay });
+    }
   }
 
-  /** Minimal-token OpenAI call — only goal, duration, hoursPerDay */
+  /** Minimal-token provider call — only goal, duration, hoursPerDay. */
   private async generatePlanOnline(input: {
     goal: string;
     durationDays: number;
     hoursPerDay: number;
     language: string;
   }): Promise<GeneratedPlan> {
-    const system =
-      input.language === 'ar'
-        ? 'مخطط أهداف. JSON فقط: milestones[{title,target_date,duration_days,description}], tasks[{title,milestone_index,due_offset_days,duration_minutes,description}], notes.'
-        : 'Goal planner. JSON only: milestones[{title,target_date,duration_days,description}], tasks[{title,milestone_index,due_offset_days,duration_minutes,description}], notes.';
+    const provider = getAIProvider();
+    if (!provider) {
+      throw new Error('No AI provider configured');
+    }
 
-    const user = JSON.stringify({
-      goal: input.goal,
+    const result = await provider.createChatCompletion({
+      messages: buildPlanMessages(input),
+      temperature: AI_CONSTANTS.planTemperature,
+      maxTokens: AI_CONSTANTS.planMaxTokens,
+      jsonMode: true,
+    });
+
+    const plan = this.parseResponse(result.content);
+
+    logger.info('[AI PROVIDER SUCCESS]', {
+      provider: result.provider,
+      model: result.model,
+      fallbackUsed: result.fallbackUsed,
+      latencyMs: result.latencyMs,
+      totalTokens: result.usage?.totalTokens,
+      goal: input.goal.substring(0, 60),
       durationDays: input.durationDays,
       hoursPerDay: input.hoursPerDay,
     });
 
-    const response = await this.openai.chat.completions.create({
-      model: this.model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      temperature: 0.6,
-      max_tokens: 1200,
-      response_format: { type: 'json_object' },
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error('No response from OpenAI');
-    }
-
-    return this.parseResponse(content);
+    return plan;
   }
 
   private parseResponse(content: string): GeneratedPlan {
@@ -215,39 +200,54 @@ class AIService {
     recommendations: string[];
     shareableSummary: string;
   }> {
-    const prompt = JSON.stringify({
-      completed: stats.completedTasks,
-      missed: stats.missedTasks,
-      consistency: stats.consistencyScore,
-      bestDays: stats.bestDays,
-    });
+    const fallback = {
+      insights: ['You showed up this week — that matters.'],
+      recommendations: ['Choose one focus block tomorrow morning.'],
+      shareableSummary: `${stats.consistencyScore}% consistency this week on Planora AI.`,
+    };
+
+    const provider = getAIProvider();
+    if (!provider) {
+      logger.info('[AI OFFLINE MODE USED]', { feature: 'weeklyReview', reason: 'no provider' });
+      return fallback;
+    }
 
     try {
-      const response = await this.openai.chat.completions.create({
-        model: this.model,
-        messages: [
-          { role: 'system', content: 'Coach. JSON only: insights[], recommendations[], shareableSummary.' },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.8,
-        max_tokens: 400,
-        response_format: { type: 'json_object' },
+      const result = await provider.createChatCompletion({
+        messages: buildWeeklyReviewMessages(stats),
+        temperature: AI_CONSTANTS.reviewTemperature,
+        maxTokens: AI_CONSTANTS.reviewMaxTokens,
+        jsonMode: true,
       });
-      const content = response.choices[0]?.message?.content || '{}';
-      const parsed = JSON.parse(content.replace(/```json|```/g, '').trim());
-      logger.info('[AI OPENAI SUCCESS]', { feature: 'weeklyReview' });
+
+      const cleaned = result.content.replace(/```json|```/g, '').trim();
+      const match = cleaned.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : cleaned);
+
+      logger.info('[AI PROVIDER SUCCESS]', {
+        feature: 'weeklyReview',
+        provider: result.provider,
+        model: result.model,
+        fallbackUsed: result.fallbackUsed,
+        latencyMs: result.latencyMs,
+      });
+
       return {
-        insights: parsed.insights || [],
-        recommendations: parsed.recommendations || [],
-        shareableSummary: parsed.shareableSummary || '',
+        insights: Array.isArray(parsed.insights) ? parsed.insights : fallback.insights,
+        recommendations: Array.isArray(parsed.recommendations)
+          ? parsed.recommendations
+          : fallback.recommendations,
+        shareableSummary:
+          typeof parsed.shareableSummary === 'string' && parsed.shareableSummary.trim()
+            ? parsed.shareableSummary
+            : fallback.shareableSummary,
       };
-    } catch {
-      logger.warn('[AI FALLBACK TRIGGERED]', { feature: 'weeklyReview' });
-      return {
-        insights: ['You showed up this week — that matters.'],
-        recommendations: ['Choose one focus block tomorrow morning.'],
-        shareableSummary: `${stats.consistencyScore}% consistency this week on Planora AI.`,
-      };
+    } catch (error) {
+      logger.warn('[AI FALLBACK TRIGGERED]', {
+        feature: 'weeklyReview',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return fallback;
     }
   }
 }

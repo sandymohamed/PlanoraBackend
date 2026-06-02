@@ -2,8 +2,10 @@ import { Router, Response } from 'express';
 import Joi from 'joi';
 import { getPrismaClient } from '../../shared/utils/database';
 import { authenticateToken } from '../../shared/middleware/auth';
-import { AuthenticatedRequest, ValidationError } from '../../shared/types';
+import { AuthenticatedRequest, ValidationError, AppError } from '../../shared/types';
 import { aiService } from './ai.service';
+import { subscriptionService } from '../subscription/subscription.service';
+import { trackServerEvent } from '../../infrastructure/analytics/posthog';
 import { logger } from '../../shared/utils/logger';
 
 const router = Router();
@@ -54,6 +56,19 @@ const calculateMilestoneDate = (
   return milestoneDueDate;
 };
 
+// GET /api/v1/ai/usage — monthly AI plan usage / remaining
+router.get('/usage', async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user!.id;
+  const usage = await subscriptionService.getAIUsage(userId);
+  return res.json({
+    success: true,
+    data: {
+      ...usage,
+      remainingPlans: usage.remaining,
+    },
+  });
+});
+
 // POST /api/v1/ai/generate-plan
 router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -80,6 +95,10 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
         error: 'Goal not found',
       });
     }
+
+    // Enforce the monthly AI quota (free beta: 3 plans/month; premium: unlimited).
+    // Throws AuthorizationError (403) when the limit is reached.
+    await subscriptionService.assertCanUseAI(userId);
 
     // Generate the plan using AI
     const plan = await aiService.generatePlan(
@@ -226,6 +245,16 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
       },
     });
 
+    // Record the successful generation against the monthly quota.
+    await subscriptionService.logAIUsage(userId, 'plan_generation');
+    const usage = await subscriptionService.getAIUsage(userId);
+
+    trackServerEvent(userId, 'ai_plan_generated', {
+      goalId,
+      milestones: createdMilestones.length,
+      tasks: createdTasks.length,
+    });
+
     logger.info('AI plan generated successfully', {
       goalId,
       userId,
@@ -245,30 +274,29 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
         plan,
         milestones: milestonesWithTargetDate,
         tasks: createdTasks,
+        remainingPlans: usage.remaining,
+        aiUsage: usage,
       },
       message: 'Plan generated successfully',
     });
   } catch (error) {
     logger.error('AI plan generation error:', error);
     
-    // Return error response instead of throwing
-    let errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
-    const statusCode = error instanceof ValidationError ? 400 : 500;
+    // Return a safe error response instead of throwing.
+    // The hybrid AI service falls back to the offline planner, so reaching here
+    // means a non-AI failure (validation, quota, DB, etc.) — never raw provider errors.
+    const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
+    const statusCode = error instanceof AppError ? error.statusCode : 500;
+    const code = error instanceof AppError ? error.code : undefined;
 
-    if (
-      errorMessage.includes('UNABLE_TO_VERIFY_LEAF_SIGNATURE') ||
-      errorMessage.includes('certificate')
-    ) {
-      errorMessage =
-        'OpenAI TLS connection failed. Restart the backend after setting OPENAI_API_KEY, or on Windows dev use default TLS settings (see PlanoraBackend .env.example).';
-    } else if (errorMessage.includes('Connection error') && !process.env.OPENAI_API_KEY) {
-      errorMessage = 'OPENAI_API_KEY is not configured on the server.';
-    }
-    
     return res.status(statusCode).json({
       success: false,
       error: errorMessage,
-      message: 'Failed to generate plan. Please try again or contact support if the issue persists.',
+      ...(code ? { code } : {}),
+      message:
+        statusCode === 403
+          ? errorMessage
+          : 'Failed to generate plan. Please try again or contact support if the issue persists.',
     });
   }
 });

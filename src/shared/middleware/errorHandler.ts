@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../../shared/utils/logger';
 import { AppError } from '../../shared/types';
+import { captureException } from '../../infrastructure/sentry/sentry';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const errorHandler = (
@@ -52,6 +53,8 @@ export const errorHandler = (
       ip: req.ip,
       userAgent: req.get('User-Agent'),
     });
+    // Report unexpected server errors to Sentry (PII scrubbed in beforeSend).
+    captureException(error, { url: req.url, method: req.method });
   } else {
     logger.warn('Client error:', {
       error: error.message,

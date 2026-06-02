@@ -1,11 +1,29 @@
 import { Router, Request, Response } from 'express';
 import Joi from 'joi';
+import rateLimit from 'express-rate-limit';
 import { AuthService } from './auth.service';
 import { logger } from '../../shared/utils/logger';
 import { ValidationError } from '../../shared/types';
 import { asyncHandler } from '../../shared/middleware/asyncHandler';
+import { authenticateToken } from '../../shared/middleware/auth';
 
 const router = Router();
+
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: { message: 'Too many password reset attempts. Try again later.' } },
+});
+
+const verifyOtpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: { message: 'Too many OTP attempts. Try again later.' } },
+});
 
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -127,6 +145,7 @@ router.post(
 // POST /api/v1/auth/logout-all
 router.post(
   '/logout-all',
+  authenticateToken,
   asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).user?.id;
     if (!userId) {
@@ -145,6 +164,7 @@ router.post(
 // POST /api/v1/auth/change-password
 router.post(
   '/change-password',
+  authenticateToken,
   asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).user?.id;
     if (!userId) {
@@ -168,6 +188,7 @@ router.post(
 // POST /api/v1/auth/forgot-password
 router.post(
   '/forgot-password',
+  passwordResetLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const { error, value } = forgotPasswordSchema.validate(req.body);
     if (error) {
@@ -186,6 +207,7 @@ router.post(
 // POST /api/v1/auth/verify-otp
 router.post(
   '/verify-otp',
+  verifyOtpLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const { error, value } = verifyOTPSchema.validate(req.body);
     if (error) {

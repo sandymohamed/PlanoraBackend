@@ -18,7 +18,7 @@ export function resolveGenerationMode(ctx: StrategyContext): AIMode {
   }
   if (ctx.forceOffline || !ctx.hasApiKey) {
     if (!ctx.hasApiKey) {
-      logger.info('[AI OFFLINE MODE USED] no OPENAI_API_KEY configured');
+      logger.info('[AI OFFLINE MODE USED] no AI provider configured');
     }
     return 'offline';
   }

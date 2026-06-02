@@ -630,3 +630,28 @@ model WeeklyReview {
   @@unique([userId, weekStart])
   @@map("weekly_reviews")
 }
+
+// Public contact form submissions from the marketing site / app
+model ContactSubmission {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("contact_submissions")
+}
+
+// Premium waitlist leads (paywall, landing, popup)
+model WaitlistLead {
+  id        String   @id @default(uuid())
+  email     String
+  source    String   @default("unknown")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([email, source])
+  @@index([createdAt])
+  @@map("waitlist_leads")
+}

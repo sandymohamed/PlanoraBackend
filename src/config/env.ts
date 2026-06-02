@@ -24,7 +24,7 @@ export const env = {
 
   freemium: {
     freeMaxActiveGoals: parseInt(process.env.FREE_MAX_ACTIVE_GOALS || '3', 10),
-    freeMaxAiPerMonth: parseInt(process.env.FREE_MAX_AI_GENERATIONS_PER_MONTH || '5', 10),
+    freeMaxAiPerMonth: parseInt(process.env.FREE_MAX_AI_GENERATIONS_PER_MONTH || '3', 10),
   },
 
   sentry: {
@@ -41,5 +41,13 @@ export const env = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  },
+
+  openrouter: {
+    apiKey: process.env.OPENROUTER_API_KEY || '',
+    primaryModel: process.env.OPENROUTER_MODEL_PRIMARY || 'x-ai/grok-4.3' ,
+    fallbackModel: process.env.OPENROUTER_MODEL_FALLBACK || 'meta-llama/llama-3.3-70b-instruct',
+    appName: process.env.OPENROUTER_APP_NAME || 'Planora AI',
+    siteUrl: process.env.OPENROUTER_SITE_URL || '',
   },
 };

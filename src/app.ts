@@ -19,6 +19,10 @@ import aiRoutes from './domains/ai/ai.routes';
 import subscriptionRoutes from './domains/subscription/subscription.routes';
 import weeklyReviewRoutes from './domains/reviews/weekly-review.routes';
 import notificationRoutes from './domains/users/notification.routes';
+import contactRoutes from './domains/contact/contact.routes';
+import waitlistRoutes from './domains/waitlist/waitlist.routes';
+import healthRoutes from './infrastructure/health/health.routes';
+import { runHealthCheck } from './infrastructure/health/healthCheck';
 
 initSentry();
 
@@ -52,12 +56,10 @@ export function createApp() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  app.get('/health', (_req, res) => {
-    res.json({
-      status: 'ok',
-      product: 'Planora AI',
-      timestamp: new Date().toISOString(),
-    });
+  app.get('/health', async (_req, res) => {
+    const health = await runHealthCheck();
+    const code = health.status === 'error' ? 503 : 200;
+    res.status(code).json(health);
   });
 
   const v1 = '/api/v1';
@@ -73,6 +75,9 @@ export function createApp() {
   app.use(`${v1}/ai`, aiLimiter, aiRoutes);
   app.use(`${v1}/subscription`, subscriptionRoutes);
   app.use(`${v1}/reviews`, weeklyReviewRoutes);
+  app.use(`${v1}/contact`, contactRoutes);
+  app.use(`${v1}/waitlist`, waitlistRoutes);
+  app.use(`${v1}/health`, healthRoutes);
 
   // Collaboration, sync, analytics — archived (not mounted in MVP)
   // See src/future/collaboration/README.md

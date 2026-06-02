@@ -69,6 +69,44 @@ export class SubscriptionService {
     return getLimitsForTier(plan);
   }
 
+  /**
+   * Monthly AI usage snapshot for the current calendar month.
+   * Premium users are effectively unlimited (`limit`/`remaining` = null).
+   */
+  async getAIUsage(userId: string): Promise<{
+    isPremium: boolean;
+    used: number;
+    limit: number | null;
+    remaining: number | null;
+    resetsAt: string;
+  }> {
+    const sub = await this.getOrCreate(userId);
+    const prisma = getPrismaClient();
+
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const resetsAt = new Date(startOfMonth);
+    resetsAt.setMonth(resetsAt.getMonth() + 1);
+
+    const used = await prisma.aIUsageLog.count({
+      where: { userId, createdAt: { gte: startOfMonth } },
+    });
+
+    if (this.isPremium(sub.tier)) {
+      return { isPremium: true, used, limit: null, remaining: null, resetsAt: resetsAt.toISOString() };
+    }
+
+    const limit = Math.min(getMonthlyAIQuota(sub.tier), env.freemium.freeMaxAiPerMonth);
+    return {
+      isPremium: false,
+      used,
+      limit,
+      remaining: Math.max(0, limit - used),
+      resetsAt: resetsAt.toISOString(),
+    };
+  }
+
   async logAIUsage(userId: string, action: string, tokens?: number): Promise<void> {
     const prisma = getPrismaClient();
     await prisma.aIUsageLog.create({

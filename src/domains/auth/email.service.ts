@@ -37,6 +37,26 @@ class EmailService {
     return `"${app}" <${from}>`;
   }
 
+  /** True when SMTP credentials are present and a transporter was created. */
+  isConfigured(): boolean {
+    return this.transporter !== null;
+  }
+
+  /**
+   * Verify the SMTP connection/credentials. Returns false (never throws) so it
+   * can be used safely in health checks and startup logging.
+   */
+  async verifyConnection(): Promise<boolean> {
+    if (!this.transporter) return false;
+    try {
+      await this.transporter.verify();
+      return true;
+    } catch (error) {
+      logger.warn('SMTP verification failed', { error: (error as Error)?.message });
+      return false;
+    }
+  }
+
   async sendEmail(options: EmailOptions): Promise<boolean> {
     if (!this.transporter) {
       logger.warn('Email skipped (SMTP not configured)', { to: options.to, subject: options.subject });

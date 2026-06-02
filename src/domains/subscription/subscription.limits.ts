@@ -8,7 +8,8 @@ export type ServerPlanTier = 'FREE' | 'PRO' | 'PREMIUM';
 export const SUBSCRIPTION_LIMITS = {
   FREE: {
     maxActiveGoals: 3,
-    maxAiPerMonth: 5,
+    // Public beta launch limit: 3 AI plans per user per month.
+    maxAiPerMonth: 3,
     maxAiPerDay: 3,
     adsEnabled: true,
   },

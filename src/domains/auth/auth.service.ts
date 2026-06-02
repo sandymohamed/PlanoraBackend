@@ -323,8 +323,8 @@ export class AuthService {
       return; // Silent fail for security
     }
 
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const { randomInt } = await import('crypto');
+    const otp = randomInt(100000, 1000000).toString();
     
     // Generate reset token
     const resetToken = uuidv4();

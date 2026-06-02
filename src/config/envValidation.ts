@@ -22,5 +22,17 @@ export function validateProductionEnv(): void {
     logger.warn('Firebase not configured — push notifications disabled');
   }
 
+  if (!process.env.OPENROUTER_API_KEY?.trim()) {
+    logger.warn('OPENROUTER_API_KEY not set — AI plans will use the offline generator only');
+  }
+
+  if (!process.env.SENTRY_DSN?.trim()) {
+    logger.warn('SENTRY_DSN not set — backend error reporting is disabled');
+  }
+
+  if (!process.env.POSTHOG_API_KEY?.trim()) {
+    logger.warn('POSTHOG_API_KEY not set — product analytics events will be dropped');
+  }
+
   logger.info('Production environment validation passed');
 }

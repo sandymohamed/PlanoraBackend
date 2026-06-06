@@ -18,6 +18,7 @@ const contactSchema = Joi.object({
 router.post('/', async (req: Request, res: Response) => {
   const { error, value } = contactSchema.validate(req.body);
   if (error) {
+    logger.error('Contact form validation error', { error });
     throw new ValidationError(error.details[0].message);
   }
 
@@ -30,6 +31,8 @@ router.post('/', async (req: Request, res: Response) => {
       message: value.message,
     },
   });
+
+  logger.info('submission', submission);
 
   trackServerEvent(value.email, 'contact_submitted', {
     subject: value.subject,

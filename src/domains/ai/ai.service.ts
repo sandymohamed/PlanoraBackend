@@ -28,13 +28,14 @@ class AIService {
    */
   async generatePlan(
     goalTitle: string,
-    _goalDescription: string,
+    goalDescription: string,
     targetDate: string,
     options: {
       intensity?: 'low' | 'medium' | 'high';
       weeklyHours?: number;
       language?: 'en' | 'ar';
       tone?: 'supportive' | 'professional' | 'casual';
+      category?: string;
       /** Subscription tier — part of the cache key (defaults to free) */
       tier?: string;
     } = {},
@@ -44,9 +45,10 @@ class AIService {
     const durationDays = computeDurationDays(targetDate);
     const hoursPerDay = computeHoursPerDay(weeklyHours);
     const goal = goalTitle.trim() || 'Goal';
+    const category = options.category?.trim() || 'General';
     const tier = options.tier ?? 'free';
 
-    const cacheKey = generateCacheKey({ goal, durationDays, hoursPerDay, tier });
+    const cacheKey = generateCacheKey({ goal, category, durationDays, hoursPerDay, tier });
     const cached = getCachedPlan(cacheKey);
     if (cached) {
       return cached;
@@ -63,7 +65,7 @@ class AIService {
     if (mode === 'offline') {
       // Offline plans are deterministic and cheap — intentionally not cached so
       // the next request can use the provider once quota/availability returns.
-      return generateOfflinePlan({ goal, durationDays, hoursPerDay });
+      return generateOfflinePlan({ goal, description: goalDescription, category, durationDays, hoursPerDay });
     }
 
     try {
@@ -84,7 +86,7 @@ class AIService {
         error: error instanceof Error ? error.message : String(error),
         goal: goal.substring(0, 60),
       });
-      return generateOfflinePlan({ goal, durationDays, hoursPerDay });
+      return generateOfflinePlan({ goal, description: goalDescription, category, durationDays, hoursPerDay });
     }
   }
 

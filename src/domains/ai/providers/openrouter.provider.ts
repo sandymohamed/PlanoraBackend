@@ -36,7 +36,6 @@ export class OpenRouterProvider implements AIProvider {
     this.apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
     this.primaryModel = AI_CONSTANTS.primaryModel;
     this.fallbackModel = AI_CONSTANTS.fallbackModel;
-    console.log('OpenRouterProvider constructor', this.apiKey, this.primaryModel, this.fallbackModel);
   }
 
 

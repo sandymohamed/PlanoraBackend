@@ -9,6 +9,8 @@ export interface CacheKeyInput {
   hoursPerDay: number;
   /** Subscription tier — lets tiers receive different plans (defaults to free) */
   tier?: string;
+  /** Goal category changes offline fallback shape and may influence future prompts. */
+  category?: string;
 }
 
 interface CacheEntry {
@@ -26,7 +28,8 @@ const cache = new Map<string, CacheEntry>();
 export function generateCacheKey(input: CacheKeyInput): string {
   const goal = input.goal.trim().toLowerCase().replace(/\s+/g, ' ');
   const tier = (input.tier ?? 'free').toLowerCase();
-  return `${goal}|${input.durationDays}|${input.hoursPerDay}|${tier}`;
+  const category = (input.category ?? 'general').trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${goal}|${category}|${input.durationDays}|${input.hoursPerDay}|${tier}`;
 }
 
 export function getCachedPlan(key: string): GeneratedPlan | null {

@@ -105,7 +105,7 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
       goal.title,
       goal.description || '',
       goal.targetDate?.toISOString() || new Date().toISOString(),
-      promptOptions,
+      { ...promptOptions, category: goal.category },
       userId
     );
 

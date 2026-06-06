@@ -38,10 +38,7 @@ export const env = {
     host: process.env.POSTHOG_HOST || 'https://us.i.posthog.com',
   },
 
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-  },
+  
 
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY || '',

@@ -278,8 +278,8 @@ class AuthService {
             logger_1.logger.warn('Password reset requested for non-existent email', { email });
             return; // Silent fail for security
         }
-        // Generate 6-digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const { randomInt } = await Promise.resolve().then(() => __importStar(require('crypto')));
+        const otp = randomInt(100000, 1000000).toString();
         // Generate reset token
         const resetToken = (0, uuid_1.v4)();
         // Set expiration (10 minutes)

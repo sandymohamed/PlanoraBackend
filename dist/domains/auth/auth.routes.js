@@ -5,11 +5,27 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const joi_1 = __importDefault(require("joi"));
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const auth_service_1 = require("./auth.service");
 const logger_1 = require("../../shared/utils/logger");
 const types_1 = require("../../shared/types");
 const asyncHandler_1 = require("../../shared/middleware/asyncHandler");
+const auth_1 = require("../../shared/middleware/auth");
 const router = (0, express_1.Router)();
+const passwordResetLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: { message: 'Too many password reset attempts. Try again later.' } },
+});
+const verifyOtpLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: { message: 'Too many OTP attempts. Try again later.' } },
+});
 const signupSchema = joi_1.default.object({
     email: joi_1.default.string().email().required(),
     password: joi_1.default.string().min(6).required(),
@@ -97,7 +113,7 @@ router.post('/logout', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     });
 }));
 // POST /api/v1/auth/logout-all
-router.post('/logout-all', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+router.post('/logout-all', auth_1.authenticateToken, (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) {
         throw new types_1.ValidationError('User not authenticated');
@@ -109,7 +125,7 @@ router.post('/logout-all', (0, asyncHandler_1.asyncHandler)(async (req, res) => 
     });
 }));
 // POST /api/v1/auth/change-password
-router.post('/change-password', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+router.post('/change-password', auth_1.authenticateToken, (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) {
         throw new types_1.ValidationError('User not authenticated');
@@ -125,7 +141,7 @@ router.post('/change-password', (0, asyncHandler_1.asyncHandler)(async (req, res
     });
 }));
 // POST /api/v1/auth/forgot-password
-router.post('/forgot-password', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+router.post('/forgot-password', passwordResetLimiter, (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { error, value } = forgotPasswordSchema.validate(req.body);
     if (error) {
         throw new types_1.ValidationError(error.details[0].message);
@@ -137,7 +153,7 @@ router.post('/forgot-password', (0, asyncHandler_1.asyncHandler)(async (req, res
     });
 }));
 // POST /api/v1/auth/verify-otp
-router.post('/verify-otp', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+router.post('/verify-otp', verifyOtpLimiter, (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { error, value } = verifyOTPSchema.validate(req.body);
     if (error) {
         throw new types_1.ValidationError(error.details[0].message);

@@ -24,6 +24,10 @@ const ai_routes_1 = __importDefault(require("./domains/ai/ai.routes"));
 const subscription_routes_1 = __importDefault(require("./domains/subscription/subscription.routes"));
 const weekly_review_routes_1 = __importDefault(require("./domains/reviews/weekly-review.routes"));
 const notification_routes_1 = __importDefault(require("./domains/users/notification.routes"));
+const contact_routes_1 = __importDefault(require("./domains/contact/contact.routes"));
+const waitlist_routes_1 = __importDefault(require("./domains/waitlist/waitlist.routes"));
+const health_routes_1 = __importDefault(require("./infrastructure/health/health.routes"));
+const healthCheck_1 = require("./infrastructure/health/healthCheck");
 (0, sentry_1.initSentry)();
 function createApp() {
     const app = (0, express_1.default)();
@@ -48,12 +52,10 @@ function createApp() {
         message: { success: false, error: { message: 'AI rate limit exceeded' } },
     });
     app.use(express_1.default.json({ limit: '10mb' }));
-    app.get('/health', (_req, res) => {
-        res.json({
-            status: 'ok',
-            product: 'Planora AI',
-            timestamp: new Date().toISOString(),
-        });
+    app.get('/health', async (_req, res) => {
+        const health = await (0, healthCheck_1.runHealthCheck)();
+        const code = health.status === 'error' ? 503 : 200;
+        res.status(code).json(health);
     });
     const v1 = '/api/v1';
     app.use(`${v1}/auth`, auth_routes_1.default);
@@ -68,6 +70,9 @@ function createApp() {
     app.use(`${v1}/ai`, aiLimiter, ai_routes_1.default);
     app.use(`${v1}/subscription`, subscription_routes_1.default);
     app.use(`${v1}/reviews`, weekly_review_routes_1.default);
+    app.use(`${v1}/contact`, contact_routes_1.default);
+    app.use(`${v1}/waitlist`, waitlist_routes_1.default);
+    app.use(`${v1}/health`, health_routes_1.default);
     // Collaboration, sync, analytics — archived (not mounted in MVP)
     // See src/future/collaboration/README.md
     app.use(errorHandler_1.errorHandler);

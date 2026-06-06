@@ -10,6 +10,7 @@ router.use(auth_1.authenticateToken);
 router.get('/', async (req, res) => {
     const userId = req.user.id;
     const sub = await subscription_service_1.subscriptionService.getOrCreate(userId);
+    const aiUsage = await subscription_service_1.subscriptionService.getAIUsage(userId);
     res.json({
         success: true,
         data: {
@@ -20,6 +21,8 @@ router.get('/', async (req, res) => {
                 maxAiPerMonth: env_1.env.freemium.freeMaxAiPerMonth,
             },
             isPremium: subscription_service_1.subscriptionService.isPremium(sub.tier),
+            aiUsage,
+            remainingPlans: aiUsage.remaining,
         },
     });
 });

@@ -39,6 +39,9 @@ export function createApp() {
     })
   );
 
+  
+  app.set('trust proxy', 1);
+
   const limiter = rateLimit({
     windowMs: env.rateLimit.windowMs,
     max: env.rateLimit.maxRequests,
@@ -62,6 +65,10 @@ export function createApp() {
     res.status(code).json(health);
   });
 
+  // ✅ Sentry request handler (captures all requests)
+app.use(Sentry.Handlers.requestHandler());
+
+
   const v1 = '/api/v1';
   app.use(`${v1}/auth`, authRoutes);
   app.use(`${v1}/me`, userRoutes);
@@ -83,6 +90,9 @@ export function createApp() {
   // See src/future/collaboration/README.md
 
   app.use(errorHandler);
+
+  // ✅ Sentry error handler (MUST be last middleware)
+app.use(Sentry.Handlers.errorHandler());
 
   return app;
 }

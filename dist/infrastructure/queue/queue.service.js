@@ -105,14 +105,18 @@ const initializeWorkers = async () => {
         ...defaultWorkerOptions,
         concurrency: 20,
     });
-    // AI Plan Generation worker
-    workers[exports.QUEUE_NAMES.AI_PLAN_GENERATION] = new bullmq_1.Worker(exports.QUEUE_NAMES.AI_PLAN_GENERATION, async (job) => {
-        await processAIPlanGenerationJob(job);
-    }, {
-        ...defaultWorkerOptions,
-        concurrency: 5,
-        lockDuration: 600000, // 10 minutes for AI jobs that might take longer
-    });
+    // // AI Plan Generation worker
+    // workers[QUEUE_NAMES.AI_PLAN_GENERATION] = new Worker(
+    //   QUEUE_NAMES.AI_PLAN_GENERATION,
+    //   async (job: Job) => {
+    //     await processAIPlanGenerationJob(job);
+    //   },
+    //   {
+    //     ...defaultWorkerOptions,
+    //     concurrency: 5,
+    //     lockDuration: 600000, // 10 minutes for AI jobs that might take longer
+    //   }
+    // );
     // Email worker
     workers[exports.QUEUE_NAMES.EMAIL] = new bullmq_1.Worker(exports.QUEUE_NAMES.EMAIL, async (job) => {
         await processEmailJob(job);
@@ -630,22 +634,21 @@ async function processNotificationJob(job) {
         throw error;
     }
 }
-async function processAIPlanGenerationJob(job) {
-    const { goalId } = job.data;
-    logger_1.logger.info(`Processing AI plan generation job: ${goalId}`);
-    try {
-        // TODO: Implement AI plan generation
-        // - Call OpenAI API
-        // - Parse response
-        // - Create milestones and tasks
-        // - Schedule reminders
-        logger_1.logger.info(`AI plan generation job completed: ${goalId}`);
-    }
-    catch (error) {
-        logger_1.logger.error(`AI plan generation job failed: ${goalId}`, error);
-        throw error;
-    }
-}
+// async function processAIPlanGenerationJob(job: Job): Promise<void> {
+//   const { goalId } = job.data;
+//   logger.info(`Processing AI plan generation job: ${goalId}`);
+//   try {
+//     // TODO: Implement AI plan generation
+//     // - Call OpenAI API
+//     // - Parse response
+//     // - Create milestones and tasks
+//     // - Schedule reminders
+//     logger.info(`AI plan generation job completed: ${goalId}`);
+//   } catch (error) {
+//     logger.error(`AI plan generation job failed: ${goalId}`, error);
+//     throw error;
+//   }
+// }
 async function processEmailJob(job) {
     const { to } = job.data;
     // TODO: Extract and use subject, body, template, data when implementing email sending

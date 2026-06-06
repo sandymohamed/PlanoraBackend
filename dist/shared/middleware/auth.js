@@ -18,7 +18,7 @@ const authenticateToken = async (req, res, next) => {
         // Decoded token is used below to fetch user
         // Get user from database
         const prisma = (0, database_1.getPrismaClient)();
-        const user = await prisma.user.findUnique({
+        const user = await (0, database_1.executeWithRetry)(() => prisma.user.findUnique({
             where: { id: decoded.userId },
             select: {
                 id: true,
@@ -29,7 +29,7 @@ const authenticateToken = async (req, res, next) => {
                 createdAt: true,
                 updatedAt: true,
             },
-        });
+        }), 3, 500);
         if (!user) {
             throw new types_1.AuthenticationError('User not found');
         }

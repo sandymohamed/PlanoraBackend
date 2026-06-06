@@ -1,158 +1,104 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.aiService = void 0;
-const openai_1 = __importDefault(require("openai"));
 const logger_1 = require("../../shared/utils/logger");
+const ai_cache_1 = require("./ai.cache");
+const ai_limits_1 = require("./ai.limits");
+const ai_offline_1 = require("./ai.offline");
+const ai_strategy_1 = require("./ai.strategy");
+const provider_factory_1 = require("./providers/provider.factory");
+const ai_prompts_1 = require("./ai.prompts");
+const ai_constants_1 = require("./ai.constants");
 class AIService {
-    constructor() {
-        this.openai = new openai_1.default({
-            apiKey: process.env.OPENAI_API_KEY,
-        });
-        this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-    }
     static getInstance() {
         if (!AIService.instance) {
             AIService.instance = new AIService();
         }
         return AIService.instance;
     }
-    async generatePlan(goalTitle, goalDescription, targetDate, options = {}) {
+    /**
+     * Hybrid plan generation: cache → provider (if allowed) → offline fallback.
+     * Always returns a plan; never throws on provider quota/network failures.
+     */
+    async generatePlan(goalTitle, goalDescription, targetDate, options = {}, userId) {
+        const weeklyHours = options.weeklyHours ?? 10;
+        const durationDays = (0, ai_strategy_1.computeDurationDays)(targetDate);
+        const hoursPerDay = (0, ai_strategy_1.computeHoursPerDay)(weeklyHours);
+        const goal = goalTitle.trim() || 'Goal';
+        const category = options.category?.trim() || 'General';
+        const tier = options.tier ?? 'free';
+        const cacheKey = (0, ai_cache_1.generateCacheKey)({ goal, category, durationDays, hoursPerDay, tier });
+        const cached = (0, ai_cache_1.getCachedPlan)(cacheKey);
+        if (cached) {
+            return cached;
+        }
+        const limit = userId ? (0, ai_limits_1.checkAiDailyLimit)(userId, false) : { forceOffline: false, allowed: true, count: 0, limit: 10 };
+        const provider = (0, provider_factory_1.getAIProvider)();
+        const mode = (0, ai_strategy_1.resolveGenerationMode)({
+            cacheHit: false,
+            forceOffline: limit.forceOffline,
+            hasApiKey: provider !== null,
+        });
+        if (mode === 'offline') {
+            // Offline plans are deterministic and cheap — intentionally not cached so
+            // the next request can use the provider once quota/availability returns.
+            return (0, ai_offline_1.generateOfflinePlan)({ goal, description: goalDescription, category, durationDays, hoursPerDay });
+        }
         try {
-            const { intensity = 'medium', weeklyHours = 10, language = 'en', tone = 'supportive', } = options;
-            const prompt = this.buildPrompt(goalTitle, goalDescription, targetDate, {
-                intensity,
-                weeklyHours,
-                language,
-                tone,
-            });
-            const response = await this.openai.chat.completions.create({
-                model: this.model,
-                messages: [
-                    {
-                        role: 'system',
-                        content: this.getSystemPrompt(language),
-                    },
-                    {
-                        role: 'user',
-                        content: prompt,
-                    },
-                ],
-                temperature: 0.7,
-                max_tokens: 2000,
-            });
-            const content = response.choices[0]?.message?.content;
-            if (!content) {
-                throw new Error('No response from OpenAI');
+            if (userId) {
+                (0, ai_limits_1.checkAiDailyLimit)(userId, true);
             }
-            return this.parseResponse(content);
+            const plan = await this.generatePlanOnline({
+                goal,
+                durationDays,
+                hoursPerDay,
+                language: options.language ?? 'en',
+            });
+            // Cache successful provider responses only.
+            (0, ai_cache_1.setCachedPlan)(cacheKey, plan);
+            return plan;
         }
         catch (error) {
-            logger_1.logger.error('Failed to generate AI plan:', error);
-            // Handle specific OpenAI errors
-            if (error?.code === 'model_not_found' || error?.status === 404) {
-                const fallbackMessage = `OpenAI model "${this.model}" is unavailable. Set OPENAI_MODEL to a valid model (e.g. "gpt-4o-mini") or verify your API access.`;
-                throw new Error(fallbackMessage);
-            }
-            // Re-throw parse errors as-is (they already have meaningful messages from parseResponse)
-            if (error instanceof Error && (error.message.includes('parse') || error.message.includes('Invalid response format') || error.message.includes('JSON'))) {
-                throw error;
-            }
-            // Wrap other errors with a user-friendly message
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-            throw new Error(`AI service error: ${errorMessage}`);
+            logger_1.logger.warn('[AI FALLBACK TRIGGERED]', {
+                error: error instanceof Error ? error.message : String(error),
+                goal: goal.substring(0, 60),
+            });
+            return (0, ai_offline_1.generateOfflinePlan)({ goal, description: goalDescription, category, durationDays, hoursPerDay });
         }
     }
-    buildPrompt(goalTitle, goalDescription, targetDate, options) {
-        const { intensity, weeklyHours, language, tone } = options;
-        if (language === 'ar') {
-            return `
-الهدف: "${goalTitle}"
-الوصف: "${goalDescription}"
-التاريخ المستهدف: ${targetDate}
-الكثافة: ${intensity}
-الساعات الأسبوعية: ${weeklyHours}
-النبرة: ${tone}
-
-يرجى إنشاء خطة مفصلة لتحقيق هذا الهدف مع:
-- معالم واضحة وقابلة للقياس
-- مهام عملية ومحددة
-- جدول زمني واقعي
-- تذكيرات مناسبة
-- ملاحظات مفيدة
-
-تأكد من أن الخطة مناسبة للمستوى المطلوب والوقت المتاح.
-      `.trim();
+    /** Minimal-token provider call — only goal, duration, hoursPerDay. */
+    async generatePlanOnline(input) {
+        const provider = (0, provider_factory_1.getAIProvider)();
+        if (!provider) {
+            throw new Error('No AI provider configured');
         }
-        return `
-Goal: "${goalTitle}"
-Description: "${goalDescription}"
-Target Date: ${targetDate}
-Intensity: ${intensity}
-Weekly Hours: ${weeklyHours}
-Tone: ${tone}
-
-Please create a detailed plan to achieve this goal with:
-- Clear, measurable milestones
-- Practical, specific tasks
-- Realistic timeline
-- Appropriate reminders
-- Helpful notes
-
-Make sure the plan is suitable for the requested level and available time.
-    `.trim();
-    }
-    getSystemPrompt(language) {
-        if (language === 'ar') {
-            return `
-أنت خبير في التخطيط الشخصي والمهني. مهمتك هي تحويل الأهداف إلى خطط عمل مفصلة ومنظمة.
-
-يجب أن ترد دائماً بصيغة JSON صالحة مع المفاتيح التالية:
-- "milestones": مصفوفة من المعالم مع {title, target_date (تنسيق ISO YYYY-MM-DD), duration_days (كبديل), description, tasks}
-- "tasks": مصفوفة مسطحة من المهام مع {title, milestone_index, due_offset_days, duration_minutes, recurrence, description}
-- "notes": نص مفيد إضافي
-
-قواعد مهمة:
-1. اجعل المهام عملية وقابلة للتنفيذ
-2. استخدم فترات زمنية واقعية
-3. رتب المهام بترتيب منطقي
-4. أضف تذكيرات مناسبة للمهام المهمة
-5. استخدم نبرة داعمة ومحفزة
-6. تأكد من أن الخطة قابلة للتحقيق في الوقت المحدد
-7. للمعالم: قدم target_date بتنسيق ISO (YYYY-MM-DD) لكل معلم. يجب توزيع التواريخ بالتساوي من اليوم حتى تاريخ الهدف. يجب أن ينتهي آخر معلم في تاريخ الهدف أو قبله.
-      `.trim();
-        }
-        return `
-You are an expert personal and professional planner. Your task is to convert goals into detailed, structured action plans.
-
-You must always respond with valid JSON format containing these keys:
-- "milestones": array of milestones with {title, target_date (ISO format YYYY-MM-DD), duration_days (as fallback), description, tasks}
-- "tasks": flattened array of tasks with {title, milestone_index, due_offset_days, duration_minutes, recurrence, description}
-- "notes": additional helpful text
-
-Important rules:
-1. Make tasks practical and actionable
-2. Use realistic timeframes
-3. Order tasks in logical sequence
-4. Add appropriate reminders for important tasks
-5. Use supportive and motivating tone
-6. Ensure the plan is achievable within the given timeframe
-7. For milestones: Provide target_date in ISO format (YYYY-MM-DD) for each milestone. Dates should be distributed evenly from today to the goal target date. The last milestone should end on or before the goal target date.
-    `.trim();
+        const result = await provider.createChatCompletion({
+            messages: (0, ai_prompts_1.buildPlanMessages)(input),
+            temperature: ai_constants_1.AI_CONSTANTS.planTemperature,
+            maxTokens: ai_constants_1.AI_CONSTANTS.planMaxTokens,
+            jsonMode: true,
+        });
+        const plan = this.parseResponse(result.content);
+        logger_1.logger.info('[AI PROVIDER SUCCESS]', {
+            provider: result.provider,
+            model: result.model,
+            fallbackUsed: result.fallbackUsed,
+            latencyMs: result.latencyMs,
+            totalTokens: result.usage?.totalTokens,
+            goal: input.goal.substring(0, 60),
+            durationDays: input.durationDays,
+            hoursPerDay: input.hoursPerDay,
+        });
+        return plan;
     }
     parseResponse(content) {
         try {
-            // Clean the response to extract JSON - try multiple strategies
             let jsonString = '';
-            // Strategy 1: Try to find JSON object in the response
             const jsonMatch = content.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
                 jsonString = jsonMatch[0];
             }
             else {
-                // Strategy 2: Try to find JSON array
                 const arrayMatch = content.match(/\[[\s\S]*\]/);
                 if (arrayMatch) {
                     jsonString = `{"data": ${arrayMatch[0]}}`;
@@ -161,38 +107,19 @@ Important rules:
                     throw new Error('No JSON found in response');
                 }
             }
-            // Try to fix common JSON issues before parsing
-            let cleanedJson = jsonString
-                // Remove trailing commas before closing brackets/braces
-                .replace(/,(\s*[}\]])/g, '$1')
-                // Fix single quotes to double quotes (basic cases)
-                .replace(/'/g, '"');
+            let cleanedJson = jsonString.replace(/,(\s*[}\]])/g, '$1').replace(/'/g, '"');
             let parsed;
             try {
                 parsed = JSON.parse(cleanedJson);
             }
-            catch (parseError) {
-                // If cleaning didn't work, try original string
-                try {
-                    parsed = JSON.parse(jsonString);
-                }
-                catch (secondError) {
-                    logger_1.logger.error('JSON parse error details:', {
-                        originalError: parseError,
-                        cleanedError: secondError,
-                        jsonLength: jsonString.length,
-                        preview: jsonString.substring(0, 500)
-                    });
-                    throw new Error('Failed to parse JSON response from AI');
-                }
+            catch {
+                parsed = JSON.parse(jsonString);
             }
-            // Validate and structure the response
-            const plan = {
+            return {
                 milestones: this.validateMilestones(parsed.milestones || parsed.data?.milestones || []),
                 tasks: this.validateTasks(parsed.tasks || parsed.data?.tasks || []),
                 notes: parsed.notes || parsed.data?.notes || '',
             };
-            return plan;
         }
         catch (error) {
             logger_1.logger.error('Failed to parse AI response:', error);
@@ -202,8 +129,8 @@ Important rules:
     validateMilestones(milestones) {
         return milestones.map((milestone, index) => ({
             title: milestone.title || `Milestone ${index + 1}`,
-            durationDays: Math.max(1, parseInt(milestone.duration_days) || 7), // Fallback
-            targetDate: milestone.target_date || milestone.targetDate || undefined, // AI-generated date
+            durationDays: Math.max(1, parseInt(milestone.duration_days) || 7),
+            targetDate: milestone.target_date || milestone.targetDate || undefined,
             description: milestone.description || '',
             tasks: milestone.tasks || [],
         }));
@@ -218,124 +145,58 @@ Important rules:
             description: task.description || '',
         }));
     }
-    // Generate a simple plan for testing
-    async generateSimplePlan(_goalTitle) {
-        return {
-            milestones: [
-                {
-                    title: 'Getting Started',
-                    durationDays: 7,
-                    description: 'Initial setup and planning phase',
-                    tasks: ['Research and gather information', 'Set up tools and resources'],
-                },
-                {
-                    title: 'Core Development',
-                    durationDays: 21,
-                    description: 'Main work phase',
-                    tasks: ['Implement core features', 'Test and iterate'],
-                },
-                {
-                    title: 'Finalization',
-                    durationDays: 7,
-                    description: 'Completion and review',
-                    tasks: ['Final testing', 'Documentation', 'Deployment'],
-                },
-            ],
-            tasks: [
-                {
-                    title: 'Research and gather information',
-                    milestoneIndex: 0,
-                    dueOffsetDays: 1,
-                    durationMinutes: 120,
-                    recurrence: undefined,
-                    description: 'Spend time researching the topic thoroughly',
-                },
-                {
-                    title: 'Set up tools and resources',
-                    milestoneIndex: 0,
-                    dueOffsetDays: 3,
-                    durationMinutes: 90,
-                    recurrence: undefined,
-                    description: 'Prepare all necessary tools and resources',
-                },
-                {
-                    title: 'Implement core features',
-                    milestoneIndex: 1,
-                    dueOffsetDays: 1,
-                    durationMinutes: 180,
-                    recurrence: 'RRULE:FREQ=DAILY;COUNT=14',
-                    description: 'Work on the main features daily',
-                },
-                {
-                    title: 'Test and iterate',
-                    milestoneIndex: 1,
-                    dueOffsetDays: 15,
-                    durationMinutes: 120,
-                    recurrence: 'RRULE:FREQ=WEEKLY;COUNT=3',
-                    description: 'Regular testing and improvement cycles',
-                },
-                {
-                    title: 'Final testing',
-                    milestoneIndex: 2,
-                    dueOffsetDays: 1,
-                    durationMinutes: 240,
-                    recurrence: undefined,
-                    description: 'Comprehensive final testing',
-                },
-                {
-                    title: 'Documentation',
-                    milestoneIndex: 2,
-                    dueOffsetDays: 3,
-                    durationMinutes: 120,
-                    recurrence: undefined,
-                    description: 'Create comprehensive documentation',
-                },
-                {
-                    title: 'Deployment',
-                    milestoneIndex: 2,
-                    dueOffsetDays: 5,
-                    durationMinutes: 90,
-                    recurrence: undefined,
-                    description: 'Deploy the final solution',
-                },
-            ],
-            notes: 'This is a sample plan. Adjust the timeline and tasks based on your specific needs and available time.',
-        };
+    async generateSimplePlan(goalTitle) {
+        return (0, ai_offline_1.generateOfflinePlan)({
+            goal: goalTitle,
+            durationDays: 21,
+            hoursPerDay: 1.5,
+        });
     }
     /** Motivational weekly review copy for shareable cards */
     async generateWeeklyReview(stats) {
-        const prompt = `You are Planora AI, a warm productivity coach. Given weekly stats:
-- Completed tasks: ${stats.completedTasks}
-- Missed tasks: ${stats.missedTasks}
-- Consistency score: ${stats.consistencyScore}%
-- Best days: ${JSON.stringify(stats.bestDays)}
-
-Respond ONLY with JSON:
-{"insights":["..."],"recommendations":["..."],"shareableSummary":"one inspiring sentence for social sharing"}`;
+        const fallback = {
+            insights: ['You showed up this week — that matters.'],
+            recommendations: ['Choose one focus block tomorrow morning.'],
+            shareableSummary: `${stats.consistencyScore}% consistency this week on Planora AI.`,
+        };
+        const provider = (0, provider_factory_1.getAIProvider)();
+        if (!provider) {
+            logger_1.logger.info('[AI OFFLINE MODE USED]', { feature: 'weeklyReview', reason: 'no provider' });
+            return fallback;
+        }
         try {
-            const response = await this.openai.chat.completions.create({
-                model: this.model,
-                messages: [
-                    { role: 'system', content: 'Supportive, motivating, not robotic. JSON only.' },
-                    { role: 'user', content: prompt },
-                ],
-                temperature: 0.8,
-                max_tokens: 600,
+            const result = await provider.createChatCompletion({
+                messages: (0, ai_prompts_1.buildWeeklyReviewMessages)(stats),
+                temperature: ai_constants_1.AI_CONSTANTS.reviewTemperature,
+                maxTokens: ai_constants_1.AI_CONSTANTS.reviewMaxTokens,
+                jsonMode: true,
             });
-            const content = response.choices[0]?.message?.content || '{}';
-            const parsed = JSON.parse(content.replace(/```json|```/g, '').trim());
+            const cleaned = result.content.replace(/```json|```/g, '').trim();
+            const match = cleaned.match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse(match ? match[0] : cleaned);
+            logger_1.logger.info('[AI PROVIDER SUCCESS]', {
+                feature: 'weeklyReview',
+                provider: result.provider,
+                model: result.model,
+                fallbackUsed: result.fallbackUsed,
+                latencyMs: result.latencyMs,
+            });
             return {
-                insights: parsed.insights || [],
-                recommendations: parsed.recommendations || [],
-                shareableSummary: parsed.shareableSummary || '',
+                insights: Array.isArray(parsed.insights) ? parsed.insights : fallback.insights,
+                recommendations: Array.isArray(parsed.recommendations)
+                    ? parsed.recommendations
+                    : fallback.recommendations,
+                shareableSummary: typeof parsed.shareableSummary === 'string' && parsed.shareableSummary.trim()
+                    ? parsed.shareableSummary
+                    : fallback.shareableSummary,
             };
         }
-        catch {
-            return {
-                insights: ['You showed up this week — that matters.'],
-                recommendations: ['Choose one focus block tomorrow morning.'],
-                shareableSummary: `${stats.consistencyScore}% consistency this week on Planora AI.`,
-            };
+        catch (error) {
+            logger_1.logger.warn('[AI FALLBACK TRIGGERED]', {
+                feature: 'weeklyReview',
+                error: error instanceof Error ? error.message : String(error),
+            });
+            return fallback;
         }
     }
 }

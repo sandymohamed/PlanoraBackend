@@ -42,6 +42,8 @@ const database_1 = require("../../shared/utils/database");
 const auth_1 = require("../../shared/middleware/auth");
 const types_1 = require("../../shared/types");
 const ai_service_1 = require("./ai.service");
+const subscription_service_1 = require("../subscription/subscription.service");
+const posthog_1 = require("../../infrastructure/analytics/posthog");
 const logger_1 = require("../../shared/utils/logger");
 const router = (0, express_1.Router)();
 // Apply authentication to all routes
@@ -78,6 +80,18 @@ const calculateMilestoneDate = (now, goalTargetDate, cumulativeDays, totalDurati
     }
     return milestoneDueDate;
 };
+// GET /api/v1/ai/usage — monthly AI plan usage / remaining
+router.get('/usage', async (req, res) => {
+    const userId = req.user.id;
+    const usage = await subscription_service_1.subscriptionService.getAIUsage(userId);
+    return res.json({
+        success: true,
+        data: {
+            ...usage,
+            remainingPlans: usage.remaining,
+        },
+    });
+});
 // POST /api/v1/ai/generate-plan
 router.post('/generate-plan', async (req, res) => {
     try {
@@ -101,8 +115,11 @@ router.post('/generate-plan', async (req, res) => {
                 error: 'Goal not found',
             });
         }
+        // Enforce the monthly AI quota (free beta: 3 plans/month; premium: unlimited).
+        // Throws AuthorizationError (403) when the limit is reached.
+        await subscription_service_1.subscriptionService.assertCanUseAI(userId);
         // Generate the plan using AI
-        const plan = await ai_service_1.aiService.generatePlan(goal.title, goal.description || '', goal.targetDate?.toISOString() || new Date().toISOString(), promptOptions);
+        const plan = await ai_service_1.aiService.generatePlan(goal.title, goal.description || '', goal.targetDate?.toISOString() || new Date().toISOString(), { ...promptOptions, category: goal.category }, userId);
         // Create milestones and tasks in the database
         const createdMilestones = [];
         const createdTasks = [];
@@ -222,6 +239,14 @@ router.post('/generate-plan', async (req, res) => {
                 planSource: 'AI',
             },
         });
+        // Record the successful generation against the monthly quota.
+        await subscription_service_1.subscriptionService.logAIUsage(userId, 'plan_generation');
+        const usage = await subscription_service_1.subscriptionService.getAIUsage(userId);
+        (0, posthog_1.trackServerEvent)(userId, 'ai_plan_generated', {
+            goalId,
+            milestones: createdMilestones.length,
+            tasks: createdTasks.length,
+        });
         logger_1.logger.info('AI plan generated successfully', {
             goalId,
             userId,
@@ -239,19 +264,27 @@ router.post('/generate-plan', async (req, res) => {
                 plan,
                 milestones: milestonesWithTargetDate,
                 tasks: createdTasks,
+                remainingPlans: usage.remaining,
+                aiUsage: usage,
             },
             message: 'Plan generated successfully',
         });
     }
     catch (error) {
         logger_1.logger.error('AI plan generation error:', error);
-        // Return error response instead of throwing
+        // Return a safe error response instead of throwing.
+        // The hybrid AI service falls back to the offline planner, so reaching here
+        // means a non-AI failure (validation, quota, DB, etc.) — never raw provider errors.
         const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
-        const statusCode = error instanceof types_1.ValidationError ? 400 : 500;
+        const statusCode = error instanceof types_1.AppError ? error.statusCode : 500;
+        const code = error instanceof types_1.AppError ? error.code : undefined;
         return res.status(statusCode).json({
             success: false,
             error: errorMessage,
-            message: 'Failed to generate plan. Please try again or contact support if the issue persists.',
+            ...(code ? { code } : {}),
+            message: statusCode === 403
+                ? errorMessage
+                : 'Failed to generate plan. Please try again or contact support if the issue persists.',
         });
     }
 });

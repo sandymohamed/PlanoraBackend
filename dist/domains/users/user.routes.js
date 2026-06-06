@@ -426,7 +426,7 @@ router.get('/export', async (req, res) => {
         const prisma = (0, database_1.getPrismaClient)();
         const userId = req.user.id;
         // Fetch all user data
-        const [user, tasks, projects, goals, alarms, reminders] = await Promise.all([
+        const [user, tasks, projects, goals, alarms, reminders, routines, timers, weeklyReviews] = await Promise.all([
             prisma.user.findUnique({
                 where: { id: userId },
                 select: {
@@ -447,11 +447,22 @@ router.get('/export', async (req, res) => {
             }),
             prisma.goal.findMany({
                 where: { userId },
+                include: { milestones: true },
             }),
             prisma.alarm.findMany({
                 where: { userId },
             }),
             prisma.reminder.findMany({
+                where: { userId },
+            }),
+            prisma.routine.findMany({
+                where: { userId },
+                include: { routineTasks: true },
+            }),
+            prisma.timer.findMany({
+                where: { userId },
+            }),
+            prisma.weeklyReview.findMany({
                 where: { userId },
             }),
         ]);
@@ -462,6 +473,9 @@ router.get('/export', async (req, res) => {
             goals,
             alarms,
             reminders,
+            routines,
+            timers,
+            weeklyReviews,
             exportedAt: new Date().toISOString(),
         };
         res.json({
@@ -485,6 +499,9 @@ router.delete('/data', async (req, res) => {
             await tx.goal.deleteMany({ where: { userId } });
             await tx.alarm.deleteMany({ where: { userId } });
             await tx.reminder.deleteMany({ where: { userId } });
+            await tx.routine.deleteMany({ where: { userId } });
+            await tx.timer.deleteMany({ where: { userId } });
+            await tx.weeklyReview.deleteMany({ where: { userId } });
             await tx.notification.deleteMany({ where: { userId } });
             await tx.projectMember.deleteMany({ where: { userId } });
             // Note: We don't delete projects as they might have other members

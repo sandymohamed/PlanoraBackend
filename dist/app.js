@@ -8,6 +8,7 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const node_1 = require("@sentry/node");
 const env_1 = require("./config/env");
 const errorHandler_1 = require("./shared/middleware/errorHandler");
 const sentry_1 = require("./infrastructure/sentry/sentry");
@@ -38,6 +39,7 @@ function createApp() {
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization'],
     }));
+    app.set('trust proxy', 1);
     const limiter = (0, express_rate_limit_1.default)({
         windowMs: env_1.env.rateLimit.windowMs,
         max: env_1.env.rateLimit.maxRequests,
@@ -75,6 +77,7 @@ function createApp() {
     app.use(`${v1}/health`, health_routes_1.default);
     // Collaboration, sync, analytics — archived (not mounted in MVP)
     // See src/future/collaboration/README.md
+    (0, node_1.setupExpressErrorHandler)(app);
     app.use(errorHandler_1.errorHandler);
     return app;
 }

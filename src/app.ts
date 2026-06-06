@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { setupExpressErrorHandler } from '@sentry/node';
 import { env } from './config/env';
 import { errorHandler } from './shared/middleware/errorHandler';
 import { initSentry } from './infrastructure/sentry/sentry';
@@ -65,10 +66,6 @@ export function createApp() {
     res.status(code).json(health);
   });
 
-  // ✅ Sentry request handler (captures all requests)
-app.use(Sentry.Handlers.requestHandler());
-
-
   const v1 = '/api/v1';
   app.use(`${v1}/auth`, authRoutes);
   app.use(`${v1}/me`, userRoutes);
@@ -89,10 +86,8 @@ app.use(Sentry.Handlers.requestHandler());
   // Collaboration, sync, analytics — archived (not mounted in MVP)
   // See src/future/collaboration/README.md
 
+  setupExpressErrorHandler(app);
   app.use(errorHandler);
-
-  // ✅ Sentry error handler (MUST be last middleware)
-app.use(Sentry.Handlers.errorHandler());
 
   return app;
 }

@@ -273,7 +273,6 @@ class AuthService {
             where: { email },
             select: { id: true, email: true, name: true },
         });
-        console.log("user:", user);
         // Don't reveal if user exists or not (security best practice)
         if (!user) {
             logger_1.logger.warn('Password reset requested for non-existent email', { email });
@@ -283,7 +282,6 @@ class AuthService {
         const otp = randomInt(100000, 1000000).toString();
         // Generate reset token
         const resetToken = (0, uuid_1.v4)();
-        console.log("resetToken: ", resetToken);
         // Set expiration (10 minutes)
         const expiresAt = new Date();
         expiresAt.setMinutes(expiresAt.getMinutes() + 10);

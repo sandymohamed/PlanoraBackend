@@ -17,6 +17,14 @@ class EmailService {
       return;
     }
 
+    logger.info('Email service configured', {
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: process.env.SMTP_SECURE === 'true',
+      user: process.env.SMTP_USER,
+      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@planora.app',
+    });
+
     this.transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: parseInt(process.env.SMTP_PORT || '587', 10),
@@ -50,9 +58,14 @@ class EmailService {
    * can be used safely in health checks and startup logging.
    */
   async verifyConnection(): Promise<boolean> {
-    if (!this.transporter) return false;
+    if (!this.transporter) {
+      logger.warn('SMTP verify skipped (transporter not configured)');
+      return false;
+    }
     try {
+      logger.info('SMTP verify started');
       await this.transporter.verify();
+      logger.info('SMTP verify succeeded');
       return true;
     } catch (error) {
       logger.warn('SMTP verification failed', { error: (error as Error)?.message });
@@ -67,7 +80,11 @@ class EmailService {
     }
 
     try {
-      logger.info('Sending email', { to: options.to, subject: options.subject });
+      logger.info('Email send step: sendMail started', {
+        to: options.to,
+        subject: options.subject,
+        from: this.fromAddress,
+      });
       const result = await this.transporter.sendMail({
         from: this.fromAddress,
         to: options.to,
@@ -75,10 +92,21 @@ class EmailService {
         html: options.html,
         text: options.text,
       });
-      logger.info('Email sent', { messageId: result.messageId, to: options.to });
-      return true;
+      logger.info('Email send step: sendMail finished', {
+        messageId: result.messageId,
+        to: options.to,
+        accepted: result.accepted,
+        rejected: result.rejected,
+        response: result.response,
+      });
+      return result.rejected.length === 0;
     } catch (error) {
-      logger.error('Failed to send email', error);
+      logger.error('Email send step: sendMail failed', {
+        to: options.to,
+        subject: options.subject,
+        error: (error as Error)?.message,
+        stack: (error as Error)?.stack,
+      });
       return false;
     }
   }
@@ -86,6 +114,7 @@ class EmailService {
   async sendPasswordResetOTP(data: { email: string; otp: string; name?: string }): Promise<boolean> {
     const { email, otp, name } = data;
     const appName = process.env.APP_NAME || 'Planora AI';
+    logger.info('Password reset email step: building OTP email', { email, appName, hasName: Boolean(name) });
 
     const html = `
       <!DOCTYPE html>
@@ -111,12 +140,16 @@ class EmailService {
 
     const text = `Password reset for ${appName}\n\nOTP: ${otp}\n\nExpires in 10 minutes.\n`;
 
-    return this.sendEmail({
+    logger.info('Password reset email step: OTP email built', { email });
+
+    const sent = await this.sendEmail({
       to: email,
       subject: `${appName} — Password reset code`,
       html,
       text,
     });
+    logger.info('Password reset email step: sendEmail returned', { email, sent });
+    return sent;
   }
 }
 

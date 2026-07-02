@@ -358,15 +358,25 @@ export class AuthService {
 
     // Create new reset token
     console.log('Password reset step: creating reset token', { traceId, email, userId: user.id });
-    await prisma.passwordResetToken.create({
-      data: {
+    try {
+      await prisma.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          email: user.email,
+          otp,
+          token: resetToken,
+          expiresAt,
+        },
+      });
+    } catch (error) {
+      console.error('Password reset step: reset token create failed', {
+        traceId,
+        email,
         userId: user.id,
-        email: user.email,
-        otp,
-        token: resetToken,
-        expiresAt,
-      },
-    });
+        error,
+      });
+      throw error;
+    }
     console.log('Password reset step: reset token created', { traceId, email, userId: user.id });
 
     // Send OTP email. Keep the API response generic, but log delivery failures

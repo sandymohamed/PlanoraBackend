@@ -13,7 +13,7 @@ class EmailService {
             logger_1.logger.warn('Email service not configured. Set SMTP_USER and SMTP_PASS to send mail.');
             return;
         }
-        logger_1.logger.info('Email service configured', {
+        console.log('Email service configured', {
             host: process.env.SMTP_HOST || 'smtp.gmail.com',
             port: parseInt(process.env.SMTP_PORT || '587', 10),
             secure: process.env.SMTP_SECURE === 'true',

@@ -143,23 +143,23 @@ router.post('/change-password', auth_1.authenticateToken, (0, asyncHandler_1.asy
 // POST /api/v1/auth/forgot-password
 router.post('/forgot-password', passwordResetLimiter, (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const traceId = `forgot-password-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    logger_1.logger.info('Forgot password step: route started', { traceId, email: req.body?.email, ip: req.ip });
-    logger_1.logger.info('Forgot password step: validating request body', { traceId });
+    console.log('Forgot password step: route started', { traceId, email: req.body?.email, ip: req.ip });
+    console.log('Forgot password step: validating request body', { traceId });
     const { error, value } = forgotPasswordSchema.validate(req.body);
     if (error) {
         logger_1.logger.warn('Forgot password step: validation failed', { traceId, error: error.details[0].message });
         throw new types_1.ValidationError(error.details[0].message);
     }
-    logger_1.logger.info('Forgot password step: validation passed', { traceId, email: value.email });
-    logger_1.logger.info('Forgot password step: calling auth service', { traceId, email: value.email });
+    console.log('Forgot password step: validation passed', { traceId, email: value.email });
+    console.log('Forgot password step: calling auth service', { traceId, email: value.email });
     await auth_service_1.AuthService.requestPasswordReset(value.email, traceId);
-    logger_1.logger.info('Forgot password step: auth service finished', { traceId, email: value.email });
-    logger_1.logger.info('Forgot password step: sending response', { traceId, email: value.email });
+    console.log('Forgot password step: auth service finished', { traceId, email: value.email });
+    console.log('Forgot password step: sending response', { traceId, email: value.email });
     res.json({
         success: true,
         message: 'If an account with that email exists, an OTP has been sent to your email.',
     });
-    logger_1.logger.info('Forgot password step: response sent', { traceId, email: value.email });
+    console.log('Forgot password step: response sent', { traceId, email: value.email });
 }));
 // POST /api/v1/auth/verify-otp
 router.post('/verify-otp', verifyOtpLimiter, (0, asyncHandler_1.asyncHandler)(async (req, res) => {

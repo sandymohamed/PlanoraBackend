@@ -5,7 +5,6 @@ import rateLimit from 'express-rate-limit';
 import { setupExpressErrorHandler } from '@sentry/node';
 import { env } from './config/env';
 import { errorHandler } from './shared/middleware/errorHandler';
-import { initSentry } from './infrastructure/sentry/sentry';
 
 // MVP routes (individual productivity)
 import authRoutes from './domains/auth/auth.routes';
@@ -24,8 +23,6 @@ import contactRoutes from './domains/contact/contact.routes';
 import waitlistRoutes from './domains/waitlist/waitlist.routes';
 import healthRoutes from './infrastructure/health/health.routes';
 import { runHealthCheck } from './infrastructure/health/healthCheck';
-
-initSentry();
 
 export function createApp() {
   const app = express();

@@ -317,6 +317,7 @@ export class AuthService {
       select: { id: true, email: true, name: true },
     });
 
+    console.log("user:", user)
     // Don't reveal if user exists or not (security best practice)
     if (!user) {
       logger.warn('Password reset requested for non-existent email', { email });
@@ -328,6 +329,7 @@ export class AuthService {
     
     // Generate reset token
     const resetToken = uuidv4();
+    console.log("resetToken: ", resetToken)
     
     // Set expiration (10 minutes)
     const expiresAt = new Date();

@@ -1,56 +1,68 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-require("./shared/utils/expressAsyncPatch");
-const app_1 = require("./app");
-const env_1 = require("./config/env");
-const envValidation_1 = require("./config/envValidation");
-const database_1 = require("./shared/utils/database");
-const redis_1 = require("./shared/utils/redis");
-const queue_service_1 = require("./infrastructure/queue/queue.service");
-const logger_1 = require("./shared/utils/logger");
-const posthog_1 = require("./infrastructure/analytics/posthog");
 const sentry_1 = require("./infrastructure/sentry/sentry");
-const email_service_1 = require("./domains/auth/email.service");
-const app = (0, app_1.createApp)();
+(0, sentry_1.initSentry)();
+// Load Express only after Sentry has initialized so Sentry can instrument it.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('./shared/utils/expressAsyncPatch');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { createApp } = require('./app');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { env } = require('./config/env');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { validateProductionEnv } = require('./config/envValidation');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { connectDatabase } = require('./shared/utils/database');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { connectRedis } = require('./shared/utils/redis');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { initializeQueues } = require('./infrastructure/queue/queue.service');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { logger } = require('./shared/utils/logger');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { shutdownPostHog } = require('./infrastructure/analytics/posthog');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { emailService } = require('./domains/auth/email.service');
+const app = createApp();
 async function bootstrap() {
-    (0, envValidation_1.validateProductionEnv)();
-    await (0, database_1.connectDatabase)();
+    validateProductionEnv();
+    await connectDatabase();
     try {
-        await (0, redis_1.connectRedis)();
-        await (0, queue_service_1.initializeQueues)();
+        await connectRedis();
+        await initializeQueues();
     }
     catch (e) {
-        logger_1.logger.warn('Redis/queues unavailable — running without background jobs', e);
+        logger.warn('Redis/queues unavailable — running without background jobs', e);
     }
-    app.listen(env_1.env.port, '0.0.0.0', () => {
-        logger_1.logger.info(`Planora API listening on http://0.0.0.0:${env_1.env.port} (LAN: use your PC IPv4, e.g. http://192.168.x.x:${env_1.env.port})`);
+    app.listen(env.port, '0.0.0.0', () => {
+        logger.info(`Planora API listening on http://0.0.0.0:${env.port} (LAN: use your PC IPv4, e.g. http://192.168.x.x:${env.port})`);
     });
     // Non-blocking SMTP health log so operators can confirm email at boot.
-    if (email_service_1.emailService.isConfigured()) {
-        email_service_1.emailService
+    if (emailService.isConfigured()) {
+        emailService
             .verifyConnection()
             .then((ok) => ok
-            ? logger_1.logger.info('SMTP verified — transactional email is ready')
-            : logger_1.logger.warn('SMTP configured but verification failed — emails may not send'))
-            .catch(() => logger_1.logger.warn('SMTP verification error'));
+            ? logger.info('SMTP verified — transactional email is ready')
+            : logger.warn('SMTP configured but verification failed — emails may not send'))
+            .catch(() => logger.warn('SMTP verification error'));
     }
     else {
-        logger_1.logger.warn('SMTP not configured — emails will be logged only (set SMTP_USER/SMTP_PASS)');
+        logger.warn('SMTP not configured — emails will be logged only (set SMTP_USER/SMTP_PASS)');
     }
 }
 bootstrap().catch((err) => {
-    logger_1.logger.error('Failed to start server', err);
+    logger.error('Failed to start server', err);
     process.exit(1);
 });
 process.on('unhandledRejection', (reason) => {
-    logger_1.logger.error('Unhandled promise rejection (API kept running)', reason);
+    logger.error('Unhandled promise rejection (API kept running)', reason);
     (0, sentry_1.captureException)(reason);
 });
 process.on('uncaughtException', (err) => {
-    logger_1.logger.error('Uncaught exception', err);
+    logger.error('Uncaught exception', err);
     (0, sentry_1.captureException)(err);
 });
 process.on('SIGTERM', async () => {
-    await (0, posthog_1.shutdownPostHog)();
+    await shutdownPostHog();
     process.exit(0);
 });

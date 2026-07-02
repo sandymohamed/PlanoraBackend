@@ -11,7 +11,6 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const node_1 = require("@sentry/node");
 const env_1 = require("./config/env");
 const errorHandler_1 = require("./shared/middleware/errorHandler");
-const sentry_1 = require("./infrastructure/sentry/sentry");
 // MVP routes (individual productivity)
 const auth_routes_1 = __importDefault(require("./domains/auth/auth.routes"));
 const user_routes_1 = __importDefault(require("./domains/users/user.routes"));
@@ -29,7 +28,6 @@ const contact_routes_1 = __importDefault(require("./domains/contact/contact.rout
 const waitlist_routes_1 = __importDefault(require("./domains/waitlist/waitlist.routes"));
 const health_routes_1 = __importDefault(require("./infrastructure/health/health.routes"));
 const healthCheck_1 = require("./infrastructure/health/healthCheck");
-(0, sentry_1.initSentry)();
 function createApp() {
     const app = (0, express_1.default)();
     app.use((0, helmet_1.default)());

@@ -1,14 +1,29 @@
-import './shared/utils/expressAsyncPatch';
-import { createApp } from './app';
-import { env } from './config/env';
-import { validateProductionEnv } from './config/envValidation';
-import { connectDatabase } from './shared/utils/database';
-import { connectRedis } from './shared/utils/redis';
-import { initializeQueues } from './infrastructure/queue/queue.service';
-import { logger } from './shared/utils/logger';
-import { shutdownPostHog } from './infrastructure/analytics/posthog';
-import { captureException } from './infrastructure/sentry/sentry';
-import { emailService } from './domains/auth/email.service';
+import { captureException, initSentry } from './infrastructure/sentry/sentry';
+
+initSentry();
+
+// Load Express only after Sentry has initialized so Sentry can instrument it.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('./shared/utils/expressAsyncPatch');
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { createApp } = require('./app') as typeof import('./app');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { env } = require('./config/env') as typeof import('./config/env');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { validateProductionEnv } = require('./config/envValidation') as typeof import('./config/envValidation');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { connectDatabase } = require('./shared/utils/database') as typeof import('./shared/utils/database');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { connectRedis } = require('./shared/utils/redis') as typeof import('./shared/utils/redis');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { initializeQueues } = require('./infrastructure/queue/queue.service') as typeof import('./infrastructure/queue/queue.service');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { logger } = require('./shared/utils/logger') as typeof import('./shared/utils/logger');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { shutdownPostHog } = require('./infrastructure/analytics/posthog') as typeof import('./infrastructure/analytics/posthog');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { emailService } = require('./domains/auth/email.service') as typeof import('./domains/auth/email.service');
 
 const app = createApp();
 

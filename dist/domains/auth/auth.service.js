@@ -299,13 +299,18 @@ class AuthService {
                 expiresAt,
             },
         });
-        // Send OTP email
-        await emailService.sendPasswordResetOTP({
+        // Send OTP email. Keep the API response generic, but log delivery failures
+        // so deployment SMTP issues are visible without exposing account existence.
+        const emailSent = await emailService.sendPasswordResetOTP({
             email: user.email,
             otp,
             name: user.name || undefined,
         });
-        logger_1.logger.info('Password reset OTP sent', { userId: user.id, email });
+        if (emailSent) {
+            logger_1.logger.info('Password reset OTP sent', { userId: user.id, email });
+            return;
+        }
+        logger_1.logger.error('Password reset OTP email was not sent', { userId: user.id, email });
     }
     static async verifyPasswordResetOTP(email, otp) {
         const prisma = (0, database_1.getPrismaClient)();

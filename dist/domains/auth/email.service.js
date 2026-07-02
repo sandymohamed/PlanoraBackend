@@ -101,7 +101,7 @@ class EmailService {
       </html>
     `;
         const text = `Password reset for ${appName}\n\nOTP: ${otp}\n\nExpires in 10 minutes.\n`;
-        await this.sendEmail({
+        return this.sendEmail({
             to: email,
             subject: `${appName} — Password reset code`,
             html,

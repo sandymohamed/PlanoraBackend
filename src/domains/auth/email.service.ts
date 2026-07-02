@@ -83,7 +83,7 @@ class EmailService {
     }
   }
 
-  async sendPasswordResetOTP(data: { email: string; otp: string; name?: string }): Promise<void> {
+  async sendPasswordResetOTP(data: { email: string; otp: string; name?: string }): Promise<boolean> {
     const { email, otp, name } = data;
     const appName = process.env.APP_NAME || 'Planora AI';
 
@@ -111,7 +111,7 @@ class EmailService {
 
     const text = `Password reset for ${appName}\n\nOTP: ${otp}\n\nExpires in 10 minutes.\n`;
 
-    await this.sendEmail({
+    return this.sendEmail({
       to: email,
       subject: `${appName} — Password reset code`,
       html,

@@ -309,23 +309,23 @@ export class AuthService {
 
   static async requestPasswordReset(email: string, traceId?: string): Promise<void> {
     const prisma = getPrismaClient();
-    logger.info('Password reset step: service started', { traceId, email });
+    console.log('Password reset step: service started', { traceId, email });
 
-    logger.info('Password reset step: importing email service', { traceId, email });
+    console.log('Password reset step: importing email service', { traceId, email });
     const { emailService } = await import('./email.service');
-    logger.info('Password reset step: email service imported', {
+    console.log('Password reset step: email service imported', {
       traceId,
       email,
       smtpConfigured: emailService.isConfigured(),
     });
 
     // Find user by email
-    logger.info('Password reset step: finding user', { traceId, email });
+    console.log('Password reset step: finding user', { traceId, email });
     const user = await prisma.user.findUnique({
       where: { email },
       select: { id: true, email: true, name: true },
     });
-    logger.info('Password reset step: user lookup finished', {
+    console.log('Password reset step: user lookup finished', {
       traceId,
       email,
       userFound: Boolean(user),
@@ -338,7 +338,7 @@ export class AuthService {
       return; // Silent fail for security
     }
 
-    logger.info('Password reset step: generating OTP and reset token', { traceId, email, userId: user.id });
+    console.log('Password reset step: generating OTP and reset token', { traceId, email, userId: user.id });
     const { randomInt } = await import('crypto');
     const otp = randomInt(100000, 1000000).toString();
     
@@ -350,14 +350,14 @@ export class AuthService {
     expiresAt.setMinutes(expiresAt.getMinutes() + 10);
 
     // Delete any existing reset tokens for this user
-    logger.info('Password reset step: deleting existing reset tokens', { traceId, email, userId: user.id });
+    console.log('Password reset step: deleting existing reset tokens', { traceId, email, userId: user.id });
     await prisma.passwordResetToken.deleteMany({
       where: { userId: user.id },
     });
-    logger.info('Password reset step: existing reset tokens deleted', { traceId, email, userId: user.id });
+    console.log('Password reset step: existing reset tokens deleted', { traceId, email, userId: user.id });
 
     // Create new reset token
-    logger.info('Password reset step: creating reset token', { traceId, email, userId: user.id });
+    console.log('Password reset step: creating reset token', { traceId, email, userId: user.id });
     await prisma.passwordResetToken.create({
       data: {
         userId: user.id,
@@ -367,24 +367,24 @@ export class AuthService {
         expiresAt,
       },
     });
-    logger.info('Password reset step: reset token created', { traceId, email, userId: user.id });
+    console.log('Password reset step: reset token created', { traceId, email, userId: user.id });
 
     // Send OTP email. Keep the API response generic, but log delivery failures
     // so deployment SMTP issues are visible without exposing account existence.
-    logger.info('Password reset step: sending OTP email', { traceId, email, userId: user.id });
+    console.log('Password reset step: sending OTP email', { traceId, email, userId: user.id });
     const emailSent = await emailService.sendPasswordResetOTP({
       email: user.email,
       otp,
       name: user.name || undefined,
     });
-    logger.info('Password reset step: OTP email send finished', { traceId, email, userId: user.id, emailSent });
+    console.log('Password reset step: OTP email send finished', { traceId, email, userId: user.id, emailSent });
 
     if (emailSent) {
-      logger.info('Password reset OTP sent', { traceId, userId: user.id, email });
+      console.log('Password reset OTP sent', { traceId, userId: user.id, email });
       return;
     }
 
-    logger.error('Password reset OTP email was not sent', { traceId, userId: user.id, email });
+    console.error('Password reset OTP email was not sent', { traceId, userId: user.id, email });
   }
 
   static async verifyPasswordResetOTP(email: string, otp: string): Promise<string> {

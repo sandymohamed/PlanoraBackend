@@ -1,3 +1,4 @@
+// email.services.ts
 import nodemailer from 'nodemailer';
 import { logger } from '../../shared/utils/logger';
 
@@ -73,18 +74,67 @@ class EmailService {
     }
   }
 
+  // async sendEmail(options: EmailOptions): Promise<boolean> {
+  //   if (!this.transporter) {
+  //     logger.warn('Email skipped (SMTP not configured)', { to: options.to, subject: options.subject });
+  //     return false;
+  //   }
+
+  //   try {
+  //     logger.info('Email send step: sendMail started', {
+  //       to: options.to,
+  //       subject: options.subject,
+  //       from: this.fromAddress,
+  //     });
+  //     const result = await this.transporter.sendMail({
+  //       from: this.fromAddress,
+  //       to: options.to,
+  //       subject: options.subject,
+  //       html: options.html,
+  //       text: options.text,
+  //     });
+  //     logger.info('Email send step: sendMail finished', {
+  //       messageId: result.messageId,
+  //       to: options.to,
+  //       accepted: result.accepted,
+  //       rejected: result.rejected,
+  //       response: result.response,
+  //     });
+  //     return result.rejected.length === 0;
+  //   } catch (error) {
+  //     logger.error('Email send step: sendMail failed', {
+  //       to: options.to,
+  //       subject: options.subject,
+  //       error: (error as Error)?.message,
+  //       stack: (error as Error)?.stack,
+  //     });
+  //     return false;
+  //   }
+  // }
+
   async sendEmail(options: EmailOptions): Promise<boolean> {
+    console.log("A - sendEmail entered");
+
+    this.verifyConnection()
+      .then(() => console.log("SMTP VERIFIED"))
+      .catch(err => console.error("SMTP VERIFY FAILED", err));
+
     if (!this.transporter) {
-      logger.warn('Email skipped (SMTP not configured)', { to: options.to, subject: options.subject });
+      console.log("B - transporter is null");
       return false;
     }
 
+    console.log("C - transporter exists");
+
     try {
-      logger.info('Email send step: sendMail started', {
-        to: options.to,
-        subject: options.subject,
-        from: this.fromAddress,
-      });
+      console.log("D - verifying SMTP");
+
+      await this.transporter.verify();
+
+      console.log("E - verify passed");
+
+      console.log("F - calling sendMail");
+
       const result = await this.transporter.sendMail({
         from: this.fromAddress,
         to: options.to,
@@ -92,21 +142,19 @@ class EmailService {
         html: options.html,
         text: options.text,
       });
-      logger.info('Email send step: sendMail finished', {
-        messageId: result.messageId,
-        to: options.to,
+
+      console.log("G - sendMail returned", {
         accepted: result.accepted,
         rejected: result.rejected,
         response: result.response,
+        envelope: result.envelope,
+        messageId: result.messageId,
       });
+
       return result.rejected.length === 0;
-    } catch (error) {
-      logger.error('Email send step: sendMail failed', {
-        to: options.to,
-        subject: options.subject,
-        error: (error as Error)?.message,
-        stack: (error as Error)?.stack,
-      });
+
+    } catch (err) {
+      console.error("H - sendMail exception", err);
       return false;
     }
   }

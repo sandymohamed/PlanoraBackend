@@ -40,6 +40,10 @@ class EmailService {
       tls: {
         rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
       },
+      
+    
+      logger: true,
+      debug: true,
     });
   }
 
@@ -113,27 +117,19 @@ class EmailService {
   // }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    console.log("A - sendEmail entered");
-
-    this.verifyConnection()
-      .then(() => console.log("SMTP VERIFIED"))
-      .catch(err => console.error("SMTP VERIFY FAILED", err));
-
     if (!this.transporter) {
-      console.log("B - transporter is null");
+      console.log("Transporter is null");
       return false;
     }
 
-    console.log("C - transporter exists");
-
     try {
-      console.log("D - verifying SMTP");
+      console.log("Verifying...");
 
       await this.transporter.verify();
 
-      console.log("E - verify passed");
+      console.log("Verify OK");
 
-      console.log("F - calling sendMail");
+      console.log("Sending mail...");
 
       const result = await this.transporter.sendMail({
         from: this.fromAddress,
@@ -143,18 +139,14 @@ class EmailService {
         text: options.text,
       });
 
-      console.log("G - sendMail returned", {
-        accepted: result.accepted,
-        rejected: result.rejected,
-        response: result.response,
-        envelope: result.envelope,
-        messageId: result.messageId,
-      });
+      console.log("Mail sent", result);
 
-      return result.rejected.length === 0;
+      return true;
 
     } catch (err) {
-      console.error("H - sendMail exception", err);
+
+      console.error(err);
+
       return false;
     }
   }

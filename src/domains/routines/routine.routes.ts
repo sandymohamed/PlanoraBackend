@@ -279,12 +279,10 @@ router.delete('/:routineId', async (req: AuthenticatedRequest, res: Response) =>
   try {
     const userId = req.user!.id;
     const { routineId } = req.params;
-    
+
+    // Cancel notifications before deleting; cancellation needs routine/task data.
+    await cancelRoutineNotifications(routineId, userId);
     await routineService.deleteRoutine(routineId, userId);
-    
-    // Cancel all notifications for this routine
-    cancelRoutineNotifications(routineId, userId)
-      .catch(err => logger.error('Failed to cancel routine notifications:', err));
     
     return res.json({
       success: true,

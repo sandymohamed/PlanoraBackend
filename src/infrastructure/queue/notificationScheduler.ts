@@ -1349,6 +1349,28 @@ export async function cancelRoutineNotifications(
       return;
     }
 
+    const allRoutineReminders = await executeWithRetry(async () => {
+      return await prisma.reminder.findMany({
+        where: {
+          targetType: 'CUSTOM',
+          userId,
+        },
+      });
+    });
+
+    const matchingRoutineReminders = allRoutineReminders.filter((reminder) => {
+      const schedule = reminder.schedule as any;
+      return schedule?.routineId === routineId;
+    });
+
+    for (const reminder of matchingRoutineReminders) {
+      await executeWithRetry(async () => {
+        return await prisma.reminder.delete({
+          where: { id: reminder.id },
+        });
+      });
+    }
+
     // Cancel alarms for this routine
     await executeWithRetry(async () => {
       return await prisma.alarm.deleteMany({
@@ -1366,7 +1388,9 @@ export async function cancelRoutineNotifications(
       await cancelRoutineTaskNotifications(task.id, userId);
     }
 
-    logger.info(`Cancelled all notifications for routine ${routineId}`);
+    logger.info(`Cancelled all notifications for routine ${routineId}`, {
+      reminderCount: matchingRoutineReminders.length,
+    });
   } catch (error) {
     logger.warn(`Failed to cancel notifications for routine ${routineId}:`, error);
   }

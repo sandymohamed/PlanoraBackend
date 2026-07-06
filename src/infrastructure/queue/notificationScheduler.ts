@@ -1194,8 +1194,8 @@ export async function scheduleRoutineTaskNotifications(
         
         // If reminderBefore is set, calculate alarm time as routine time - reminderBefore
         if (reminderBefore) {
-          // Parse reminderBefore (e.g., "1h", "2d", "1w")
-          const match = reminderBefore.match(/^(\d+)([hdw])$/);
+          // Parse reminderBefore (e.g., "30m", "1h", "2d", "1w")
+          const match = reminderBefore.match(/^(\d+)([mhdw])$/);
           if (match) {
             const [, valueStr, unit] = match;
             const value = parseInt(valueStr, 10);
@@ -1204,7 +1204,12 @@ export async function scheduleRoutineTaskNotifications(
             let alarmHours = routineHours;
             let alarmMinutes = routineMinutes;
             
-            if (unit === 'h') {
+            if (unit === 'm') {
+              const totalMinutes = routineHours * 60 + routineMinutes - value;
+              const wrappedMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+              alarmHours = Math.floor(wrappedMinutes / 60);
+              alarmMinutes = wrappedMinutes % 60;
+            } else if (unit === 'h') {
               // Hours before - subtract hours from routine time
               alarmHours = routineHours - value;
               // Handle negative hours (wraps to previous day)
@@ -1381,15 +1386,15 @@ export async function scheduleRoutineReminderNotification(
   frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY',
   schedule: { time?: string; days?: number[]; day?: number },
   timezone: string,
-  reminderBefore: string, // e.g., "2h", "1d", "1w"
+  reminderBefore: string, // e.g., "30m", "2h", "1d", "1w"
   nextOccurrence: Date
 ): Promise<void> {
   try {
     const prisma = getPrismaClient();
     const now = new Date();
 
-    // Parse reminderBefore (e.g., "2h", "1d", "1w")
-    const match = reminderBefore.match(/^(\d+)([hdw])$/);
+    // Parse reminderBefore (e.g., "30m", "2h", "1d", "1w")
+    const match = reminderBefore.match(/^(\d+)([mhdw])$/);
     if (!match) {
       logger.warn(`Invalid reminderBefore format: ${reminderBefore}, skipping reminder notification`);
       return;
@@ -1401,7 +1406,9 @@ export async function scheduleRoutineReminderNotification(
     // Calculate reminder time by subtracting from next occurrence
     const reminderTime = new Date(nextOccurrence);
     
-    if (unit === 'h') {
+    if (unit === 'm') {
+      reminderTime.setMinutes(reminderTime.getMinutes() - value);
+    } else if (unit === 'h') {
       // Hours before
       reminderTime.setHours(reminderTime.getHours() - value);
     } else if (unit === 'd') {
@@ -1707,7 +1714,7 @@ async function createAlarmForRoutineReminder(
       
       // If reminderBefore is set and is days or weeks, adjust the date
       if (reminderBefore) {
-        const match = reminderBefore.match(/^(\d+)([hdw])$/);
+        const match = reminderBefore.match(/^(\d+)([mhdw])$/);
         if (match) {
           const [, valueStr, unit] = match;
           const value = parseInt(valueStr, 10);
@@ -1719,19 +1726,21 @@ async function createAlarmForRoutineReminder(
             // Weeks before - subtract weeks from nextOccurrence's date
             alarmTime.setDate(alarmTime.getDate() - (value * 7));
           }
-          // For 'h' (hours), the time is already calculated correctly, just use nextOccurrence's date
+          // For 'm' and 'h', the time is already calculated correctly, just use nextOccurrence's date
         }
       }
       
       logger.info(`Using provided reminderTime: ${reminderTime}, reminderBefore: ${reminderBefore}, nextOccurrence: ${nextOccurrence.toISOString()}, alarm time set to: ${alarmTime.toISOString()}`);
     } else if (reminderBefore) {
       // If reminderBefore is set but no reminderTime, calculate from nextOccurrence
-      const match = reminderBefore.match(/^(\d+)([hdw])$/);
+      const match = reminderBefore.match(/^(\d+)([mhdw])$/);
       if (match) {
         const [, valueStr, unit] = match;
         const value = parseInt(valueStr, 10);
         
-        if (unit === 'h') {
+        if (unit === 'm') {
+          alarmTime.setMinutes(alarmTime.getMinutes() - value);
+        } else if (unit === 'h') {
           // Hours before - subtract hours from nextOccurrence
           alarmTime.setHours(alarmTime.getHours() - value);
         } else if (unit === 'd') {
@@ -1760,12 +1769,14 @@ async function createAlarmForRoutineReminder(
       
       // Re-apply reminderBefore to get the correct alarm time for the next occurrence
       if (reminderBefore) {
-        const match = reminderBefore.match(/^(\d+)([hdw])$/);
+        const match = reminderBefore.match(/^(\d+)([mhdw])$/);
         if (match) {
           const [, valueStr, unit] = match;
           const value = parseInt(valueStr, 10);
           
-          if (unit === 'h') {
+          if (unit === 'm') {
+            alarmTime.setMinutes(alarmTime.getMinutes() - value);
+          } else if (unit === 'h') {
             alarmTime.setHours(alarmTime.getHours() - value);
           } else if (unit === 'd') {
             alarmTime.setDate(alarmTime.getDate() - value);
@@ -1802,12 +1813,14 @@ async function createAlarmForRoutineReminder(
         
         // Then re-apply reminderBefore to get the correct reminder time for the next cycle
         if (reminderBefore) {
-          const match = reminderBefore.match(/^(\d+)([hdw])$/);
+          const match = reminderBefore.match(/^(\d+)([mhdw])$/);
           if (match) {
             const [, valueStr, unit] = match;
             const value = parseInt(valueStr, 10);
             
-            if (unit === 'h') {
+            if (unit === 'm') {
+              alarmTime.setMinutes(alarmTime.getMinutes() - value);
+            } else if (unit === 'h') {
               alarmTime.setHours(alarmTime.getHours() - value);
             } else if (unit === 'd') {
               alarmTime.setDate(alarmTime.getDate() - value);

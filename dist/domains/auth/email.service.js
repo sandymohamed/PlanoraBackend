@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.emailService = void 0;
+// email.services.ts
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const logger_1 = require("../../shared/utils/logger");
 class EmailService {
@@ -34,6 +35,8 @@ class EmailService {
             tls: {
                 rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
             },
+            logger: true,
+            debug: true,
         });
     }
     get fromAddress() {
@@ -65,17 +68,52 @@ class EmailService {
             return false;
         }
     }
+    // async sendEmail(options: EmailOptions): Promise<boolean> {
+    //   if (!this.transporter) {
+    //     logger.warn('Email skipped (SMTP not configured)', { to: options.to, subject: options.subject });
+    //     return false;
+    //   }
+    //   try {
+    //     logger.info('Email send step: sendMail started', {
+    //       to: options.to,
+    //       subject: options.subject,
+    //       from: this.fromAddress,
+    //     });
+    //     const result = await this.transporter.sendMail({
+    //       from: this.fromAddress,
+    //       to: options.to,
+    //       subject: options.subject,
+    //       html: options.html,
+    //       text: options.text,
+    //     });
+    //     logger.info('Email send step: sendMail finished', {
+    //       messageId: result.messageId,
+    //       to: options.to,
+    //       accepted: result.accepted,
+    //       rejected: result.rejected,
+    //       response: result.response,
+    //     });
+    //     return result.rejected.length === 0;
+    //   } catch (error) {
+    //     logger.error('Email send step: sendMail failed', {
+    //       to: options.to,
+    //       subject: options.subject,
+    //       error: (error as Error)?.message,
+    //       stack: (error as Error)?.stack,
+    //     });
+    //     return false;
+    //   }
+    // }
     async sendEmail(options) {
         if (!this.transporter) {
-            logger_1.logger.warn('Email skipped (SMTP not configured)', { to: options.to, subject: options.subject });
+            console.log("Transporter is null");
             return false;
         }
         try {
-            logger_1.logger.info('Email send step: sendMail started', {
-                to: options.to,
-                subject: options.subject,
-                from: this.fromAddress,
-            });
+            console.log("Verifying...");
+            await this.transporter.verify();
+            console.log("Verify OK");
+            console.log("Sending mail...");
             const result = await this.transporter.sendMail({
                 from: this.fromAddress,
                 to: options.to,
@@ -83,22 +121,11 @@ class EmailService {
                 html: options.html,
                 text: options.text,
             });
-            logger_1.logger.info('Email send step: sendMail finished', {
-                messageId: result.messageId,
-                to: options.to,
-                accepted: result.accepted,
-                rejected: result.rejected,
-                response: result.response,
-            });
-            return result.rejected.length === 0;
+            console.log("Mail sent", result);
+            return true;
         }
-        catch (error) {
-            logger_1.logger.error('Email send step: sendMail failed', {
-                to: options.to,
-                subject: options.subject,
-                error: error?.message,
-                stack: error?.stack,
-            });
+        catch (err) {
+            console.error(err);
             return false;
         }
     }

@@ -12,7 +12,7 @@ const authenticateToken = async (req, res, next) => {
         const authHeader = req.headers.authorization;
         const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
         if (!token) {
-            throw new types_1.AuthenticationError('Access token required');
+            throw new types_1.AuthenticationError('Access token required', 'ACCESS_TOKEN_REQUIRED');
         }
         const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET);
         // Decoded token is used below to fetch user
@@ -31,17 +31,17 @@ const authenticateToken = async (req, res, next) => {
             },
         }), 3, 500);
         if (!user) {
-            throw new types_1.AuthenticationError('User not found');
+            throw new types_1.AuthenticationError('User not found', 'USER_NOT_FOUND');
         }
         req.user = user;
         next();
     }
     catch (error) {
-        if (error instanceof jsonwebtoken_1.default.JsonWebTokenError) {
-            next(new types_1.AuthenticationError('Invalid token'));
+        if (error instanceof jsonwebtoken_1.default.TokenExpiredError) {
+            next(new types_1.AuthenticationError('Token expired', 'TOKEN_EXPIRED'));
         }
-        else if (error instanceof jsonwebtoken_1.default.TokenExpiredError) {
-            next(new types_1.AuthenticationError('Token expired'));
+        else if (error instanceof jsonwebtoken_1.default.JsonWebTokenError) {
+            next(new types_1.AuthenticationError('Invalid token', 'INVALID_TOKEN'));
         }
         else {
             next(error);

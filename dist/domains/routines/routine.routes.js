@@ -56,7 +56,7 @@ const createRoutineSchema = joi_1.default.object({
         day: joi_1.default.number().min(1).max(31).optional(),
     }).required(),
     timezone: joi_1.default.string().optional().default('UTC'),
-    reminderBefore: joi_1.default.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
+    reminderBefore: joi_1.default.string().pattern(/^\d+[mhdw]$/).optional().allow(null, ''),
 });
 const updateRoutineSchema = joi_1.default.object({
     title: joi_1.default.string().trim().min(1).optional(),
@@ -69,7 +69,7 @@ const updateRoutineSchema = joi_1.default.object({
     }).optional(),
     timezone: joi_1.default.string().optional(),
     enabled: joi_1.default.boolean().optional(),
-    reminderBefore: joi_1.default.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
+    reminderBefore: joi_1.default.string().pattern(/^\d+[mhdw]$/).optional().allow(null, ''),
 });
 const createTaskSchema = joi_1.default.object({
     title: joi_1.default.string().required(),

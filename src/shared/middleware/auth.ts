@@ -13,7 +13,7 @@ export const authenticateToken = async (
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
-      throw new AuthenticationError('Access token required');
+      throw new AuthenticationError('Access token required', 'ACCESS_TOKEN_REQUIRED');
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
@@ -39,16 +39,16 @@ export const authenticateToken = async (
     );
 
     if (!user) {
-      throw new AuthenticationError('User not found');
+      throw new AuthenticationError('User not found', 'USER_NOT_FOUND');
     }
 
     req.user = user as any;
     next();
   } catch (error) {
-    if (error instanceof jwt.JsonWebTokenError) {
-      next(new AuthenticationError('Invalid token'));
-    } else if (error instanceof jwt.TokenExpiredError) {
-      next(new AuthenticationError('Token expired'));
+    if (error instanceof jwt.TokenExpiredError) {
+      next(new AuthenticationError('Token expired', 'TOKEN_EXPIRED'));
+    } else if (error instanceof jwt.JsonWebTokenError) {
+      next(new AuthenticationError('Invalid token', 'INVALID_TOKEN'));
     } else {
       next(error);
     }

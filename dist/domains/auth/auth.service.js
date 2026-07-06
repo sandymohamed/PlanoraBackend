@@ -37,7 +37,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthService = void 0;
+// auth.services.ts
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const crypto_1 = __importDefault(require("crypto"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const uuid_1 = require("uuid");
 const database_1 = require("../../shared/utils/database");
@@ -45,19 +47,38 @@ const logger_1 = require("../../shared/utils/logger");
 const types_1 = require("../../shared/types");
 const SALT_ROUNDS = 12;
 class AuthService {
+    static parseDurationMs(value, fallback) {
+        const raw = (value || fallback).trim();
+        const match = raw.match(/^(\d+)([smhd])?$/i);
+        if (!match) {
+            return AuthService.parseDurationMs(fallback, '30d');
+        }
+        const amount = Number(match[1]);
+        const unit = (match[2] || 's').toLowerCase();
+        const multipliers = {
+            s: 1000,
+            m: 60 * 1000,
+            h: 60 * 60 * 1000,
+            d: 24 * 60 * 60 * 1000,
+        };
+        return amount * multipliers[unit];
+    }
+    static accessExpiresInSeconds() {
+        return Math.floor(AuthService.parseDurationMs(process.env.JWT_EXPIRES_IN, '15m') / 1000);
+    }
     static refreshExpiresAt() {
-        const days = parseInt(process.env.JWT_REFRESH_EXPIRES_IN?.replace('d', '') || '30', 10);
-        const d = new Date();
-        d.setDate(d.getDate() + days);
-        return d;
+        return new Date(Date.now() + AuthService.parseDurationMs(process.env.JWT_REFRESH_EXPIRES_IN, '30d'));
+    }
+    static hashRefreshToken(token) {
+        return crypto_1.default.createHash('sha256').update(token).digest('hex');
     }
     static generateTokens(userId, email) {
         const accessToken = jsonwebtoken_1.default.sign({ userId, email }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
-        const refreshToken = jsonwebtoken_1.default.sign({ userId, email, type: 'refresh' }, process.env.JWT_REFRESH_SECRET, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' });
+        const refreshToken = jsonwebtoken_1.default.sign({ userId, email, type: 'refresh', jti: (0, uuid_1.v4)() }, process.env.JWT_REFRESH_SECRET, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' });
         return {
             accessToken,
             refreshToken,
-            expiresIn: 15 * 60, // 15 minutes in seconds
+            expiresIn: AuthService.accessExpiresInSeconds(),
         };
     }
     static async signup(data) {
@@ -104,7 +125,7 @@ class AuthService {
         await prisma.refreshToken.create({
             data: {
                 userId: user.id,
-                token: tokens.refreshToken,
+                token: AuthService.hashRefreshToken(tokens.refreshToken),
                 expiresAt: refreshExpiresAt,
             },
         });
@@ -130,7 +151,7 @@ class AuthService {
         await prisma.refreshToken.create({
             data: {
                 userId: user.id,
-                token: tokens.refreshToken,
+                token: AuthService.hashRefreshToken(tokens.refreshToken),
                 expiresAt: refreshExpiresAt,
             },
         });
@@ -163,18 +184,27 @@ class AuthService {
     }
     static async refreshToken(refreshToken) {
         const prisma = (0, database_1.getPrismaClient)();
-        // First check if token exists in database (this allows us to handle expired JWTs gracefully)
-        const tokenRecord = await prisma.refreshToken.findUnique({
-            where: { token: refreshToken },
+        const tokenHash = AuthService.hashRefreshToken(refreshToken);
+        // New tokens are stored as SHA-256 hashes. Fall back to raw lookup so existing
+        // sessions issued before this change survive until their next successful refresh.
+        let storedTokenValue = tokenHash;
+        let tokenRecord = await prisma.refreshToken.findUnique({
+            where: { token: tokenHash },
             include: { user: true },
         });
         if (!tokenRecord) {
-            logger_1.logger.warn('Refresh token not found in database', { token: refreshToken.substring(0, 20) + '...' });
+            tokenRecord = await prisma.refreshToken.findUnique({
+                where: { token: refreshToken },
+                include: { user: true },
+            });
+            storedTokenValue = refreshToken;
+        }
+        if (!tokenRecord) {
+            logger_1.logger.warn('Refresh token not found in database', { tokenHash: tokenHash.substring(0, 12) });
             throw new types_1.AuthenticationError('Invalid refresh token');
         }
-        // Check database expiration (this is the source of truth for new tokens)
-        // Only check expiration if expiresAt is set and not far in the future (for legacy tokens)
-        // New tokens have 100 year expiration, so this check will rarely fail
+        // Database expiration is checked before rotation so revoked/expired sessions
+        // cannot mint a fresh access token.
         if (tokenRecord.expiresAt && tokenRecord.expiresAt < new Date()) {
             // Clean up expired token
             await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
@@ -185,39 +215,45 @@ class AuthService {
             });
             throw new types_1.AuthenticationError('Refresh token expired');
         }
-        // Verify JWT signature (but allow expired JWTs if they're valid in database)
-        // This handles cases where JWT might be expired but database says it's still valid
+        // Verify the refresh JWT normally. DB storage lets us revoke sessions; JWT exp
+        // remains the cryptographic max lifetime.
+        let decoded;
         try {
-            // Try to verify without checking expiration first (verification throws if invalid)
-            jsonwebtoken_1.default.verify(refreshToken, process.env.JWT_REFRESH_SECRET, {
-                ignoreExpiration: true, // Ignore JWT expiration, use database expiration instead
-            });
+            decoded = jsonwebtoken_1.default.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
         }
         catch (error) {
-            // If signature is invalid (not just expired), then it's truly invalid
-            if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-                logger_1.logger.warn('Refresh token JWT verification failed', {
-                    error: error.name,
-                    message: error.message,
-                    tokenId: tokenRecord.id
-                });
-                // Delete invalid token from database
-                await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
-                throw new types_1.AuthenticationError('Invalid refresh token');
-            }
-            throw error;
+            logger_1.logger.warn('Refresh token JWT verification failed', {
+                error: error.name,
+                message: error.message,
+                tokenId: tokenRecord.id
+            });
+            await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
+            throw new types_1.AuthenticationError('Invalid refresh token');
+        }
+        if (decoded.type !== 'refresh' || decoded.userId !== tokenRecord.userId) {
+            await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
+            throw new types_1.AuthenticationError('Invalid refresh token');
         }
         // Generate new tokens
         const tokens = this.generateTokens(tokenRecord.user.id, tokenRecord.user.email);
-        // Update refresh token in database with very long expiration (100 years, effectively never expires)
+        const newRefreshTokenHash = AuthService.hashRefreshToken(tokens.refreshToken);
+        // Atomic rotation: update only if the presented token is still current. This
+        // prevents two concurrent refreshes from both receiving valid-looking tokens.
         const refreshExpiresAt = AuthService.refreshExpiresAt();
-        await prisma.refreshToken.update({
-            where: { id: tokenRecord.id },
+        const rotated = await prisma.refreshToken.updateMany({
+            where: {
+                id: tokenRecord.id,
+                token: storedTokenValue,
+            },
             data: {
-                token: tokens.refreshToken,
+                token: newRefreshTokenHash,
                 expiresAt: refreshExpiresAt,
             },
         });
+        if (rotated.count !== 1) {
+            logger_1.logger.warn('Refresh token rotation race detected', { tokenId: tokenRecord.id, userId: tokenRecord.userId });
+            throw new types_1.AuthenticationError('Refresh token already rotated');
+        }
         logger_1.logger.info('Tokens refreshed successfully', { userId: tokenRecord.user.id });
         return tokens;
     }
@@ -225,8 +261,9 @@ class AuthService {
         const prisma = (0, database_1.getPrismaClient)();
         // Remove refresh token from database if provided
         if (refreshToken) {
+            const tokenHash = AuthService.hashRefreshToken(refreshToken);
             await prisma.refreshToken.deleteMany({
-                where: { token: refreshToken },
+                where: { token: { in: [tokenHash, refreshToken] } },
             });
         }
         logger_1.logger.info('User logged out successfully');

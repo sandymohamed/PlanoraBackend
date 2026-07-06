@@ -14,7 +14,7 @@ export interface CreateRoutineData {
   frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
   schedule: RoutineSchedule;
   timezone?: string;
-  reminderBefore?: string; // e.g., "2h", "1d", "1w"
+  reminderBefore?: string; // e.g., "30m", "2h", "1d", "1w"
   enabled?: boolean;
 }
 

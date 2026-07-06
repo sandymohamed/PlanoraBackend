@@ -22,7 +22,7 @@ const createRoutineSchema = Joi.object({
     day: Joi.number().min(1).max(31).optional(),
   }).required(),
   timezone: Joi.string().optional().default('UTC'),
-  reminderBefore: Joi.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
+  reminderBefore: Joi.string().pattern(/^\d+[mhdw]$/).optional().allow(null, ''),
 });
 
 const updateRoutineSchema = Joi.object({
@@ -36,7 +36,7 @@ const updateRoutineSchema = Joi.object({
   }).optional(),
   timezone: Joi.string().optional(),
   enabled: Joi.boolean().optional(),
-  reminderBefore: Joi.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
+  reminderBefore: Joi.string().pattern(/^\d+[mhdw]$/).optional().allow(null, ''),
 });
 
 const createTaskSchema = Joi.object({

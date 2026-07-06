@@ -447,13 +447,15 @@ async function processReminderJob(job: Job): Promise<void> {
         const routineNext = computeNextOccurrence(schedule, scheduleTimezone);
         if (routineNext) {
           // Calculate reminder time by subtracting reminderBefore
-          const match = schedule.reminderBefore.match(/^(\d+)([hdw])$/);
+          const match = schedule.reminderBefore.match(/^(\d+)([mhdw])$/);
           if (match) {
             const [, valueStr, unit] = match;
             const value = parseInt(valueStr, 10);
             next = new Date(routineNext);
             
-            if (unit === 'h') {
+            if (unit === 'm') {
+              next.setMinutes(next.getMinutes() - value);
+            } else if (unit === 'h') {
               next.setHours(next.getHours() - value);
             } else if (unit === 'd') {
               next.setDate(next.getDate() - value);
@@ -501,7 +503,9 @@ async function processReminderJob(job: Job): Promise<void> {
                 
                 // Recalculate reminder time from new routine occurrence
                 next = new Date(nextRoutineOccurrence);
-                if (unit === 'h') {
+                if (unit === 'm') {
+                  next.setMinutes(next.getMinutes() - value);
+                } else if (unit === 'h') {
                   next.setHours(next.getHours() - value);
                 } else if (unit === 'd') {
                   next.setDate(next.getDate() - value);

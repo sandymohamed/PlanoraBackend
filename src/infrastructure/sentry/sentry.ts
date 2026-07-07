@@ -93,14 +93,69 @@ export function initSentry(): void {
   }
 }
 
-export function captureException(error: unknown, context?: Record<string, unknown>): void {
+type SentryContext =
+  | Record<string, unknown>
+  | {
+      tags?: Record<string, string | number | boolean | undefined>;
+      extra?: Record<string, unknown>;
+      contexts?: Record<string, unknown>;
+    };
+
+function applyScopeContext(
+  scope: {
+    setContext?: (k: string, v: unknown) => void;
+    setTag?: (k: string, v: string) => void;
+    setExtra?: (k: string, v: unknown) => void;
+  },
+  context?: SentryContext
+): void {
+  if (!context) return;
+  const structured = context as { tags?: Record<string, unknown>; extra?: Record<string, unknown>; contexts?: Record<string, unknown> };
+
+  if (structured.tags || structured.extra || structured.contexts) {
+    Object.entries(structured.tags || {}).forEach(([key, value]) => {
+      if (value !== undefined) scope.setTag?.(key, String(value));
+    });
+    Object.entries(structured.extra || {}).forEach(([key, value]) => {
+      scope.setExtra?.(key, scrub(value));
+    });
+    Object.entries(structured.contexts || {}).forEach(([key, value]) => {
+      scope.setContext?.(key, scrub(value));
+    });
+    return;
+  }
+
+  scope.setContext?.('details', scrub(context) as Record<string, unknown>);
+}
+
+export function captureException(error: unknown, context?: SentryContext): void {
   if (!Sentry) return;
   if (context) {
-    Sentry.withScope?.((scope: { setContext: (k: string, v: unknown) => void }) => {
-      scope.setContext('details', scrub(context) as Record<string, unknown>);
+    Sentry.withScope?.((scope: {
+      setContext?: (k: string, v: unknown) => void;
+      setTag?: (k: string, v: string) => void;
+      setExtra?: (k: string, v: unknown) => void;
+    }) => {
+      applyScopeContext(scope, context);
       Sentry.captureException?.(error);
     });
     return;
   }
   Sentry.captureException?.(error);
+}
+
+export function captureMessage(message: string, context?: SentryContext): void {
+  if (!Sentry) return;
+  if (context) {
+    Sentry.withScope?.((scope: {
+      setContext?: (k: string, v: unknown) => void;
+      setTag?: (k: string, v: string) => void;
+      setExtra?: (k: string, v: unknown) => void;
+    }) => {
+      applyScopeContext(scope, context);
+      Sentry.captureMessage?.(message);
+    });
+    return;
+  }
+  Sentry.captureMessage?.(message);
 }

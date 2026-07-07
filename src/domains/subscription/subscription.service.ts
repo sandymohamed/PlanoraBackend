@@ -52,9 +52,7 @@ export class SubscriptionService {
       where: { userId, createdAt: { gte: startOfMonth } },
     });
 
-    const monthlyCap = getMonthlyAIQuota(sub.tier);
-    const envCap = env.freemium.freeMaxAiPerMonth;
-    const limit = Math.min(monthlyCap, envCap);
+    const limit = env.freemium.freeMaxAiPerMonth || getMonthlyAIQuota(sub.tier);
 
     if (usage >= limit) {
       throw new AuthorizationError(
@@ -97,7 +95,7 @@ export class SubscriptionService {
       return { isPremium: true, used, limit: null, remaining: null, resetsAt: resetsAt.toISOString() };
     }
 
-    const limit = Math.min(getMonthlyAIQuota(sub.tier), env.freemium.freeMaxAiPerMonth);
+    const limit = env.freemium.freeMaxAiPerMonth || getMonthlyAIQuota(sub.tier);
     return {
       isPremium: false,
       used,

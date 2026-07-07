@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.initSentry = initSentry;
 exports.captureException = captureException;
+exports.captureMessage = captureMessage;
 /**
  * Sentry (optional). Install when npm SSL works:
  *   npm install @sentry/node
@@ -94,15 +95,46 @@ function initSentry() {
         console.warn('[Planora] @sentry/node not installed — crash reporting disabled');
     }
 }
+function applyScopeContext(scope, context) {
+    if (!context)
+        return;
+    const structured = context;
+    if (structured.tags || structured.extra || structured.contexts) {
+        Object.entries(structured.tags || {}).forEach(([key, value]) => {
+            if (value !== undefined)
+                scope.setTag?.(key, String(value));
+        });
+        Object.entries(structured.extra || {}).forEach(([key, value]) => {
+            scope.setExtra?.(key, scrub(value));
+        });
+        Object.entries(structured.contexts || {}).forEach(([key, value]) => {
+            scope.setContext?.(key, scrub(value));
+        });
+        return;
+    }
+    scope.setContext?.('details', scrub(context));
+}
 function captureException(error, context) {
     if (!Sentry)
         return;
     if (context) {
         Sentry.withScope?.((scope) => {
-            scope.setContext('details', scrub(context));
+            applyScopeContext(scope, context);
             Sentry.captureException?.(error);
         });
         return;
     }
     Sentry.captureException?.(error);
+}
+function captureMessage(message, context) {
+    if (!Sentry)
+        return;
+    if (context) {
+        Sentry.withScope?.((scope) => {
+            applyScopeContext(scope, context);
+            Sentry.captureMessage?.(message);
+        });
+        return;
+    }
+    Sentry.captureMessage?.(message);
 }

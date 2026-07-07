@@ -46,9 +46,7 @@ class SubscriptionService {
         const usage = await prisma.aIUsageLog.count({
             where: { userId, createdAt: { gte: startOfMonth } },
         });
-        const monthlyCap = (0, subscription_planHelpers_1.getMonthlyAIQuota)(sub.tier);
-        const envCap = env_1.env.freemium.freeMaxAiPerMonth;
-        const limit = Math.min(monthlyCap, envCap);
+        const limit = env_1.env.freemium.freeMaxAiPerMonth || (0, subscription_planHelpers_1.getMonthlyAIQuota)(sub.tier);
         if (usage >= limit) {
             throw new types_1.AuthorizationError(`Free plan includes ${limit} AI generations per month. Upgrade for unlimited AI planning.`);
         }
@@ -76,7 +74,7 @@ class SubscriptionService {
         if (this.isPremium(sub.tier)) {
             return { isPremium: true, used, limit: null, remaining: null, resetsAt: resetsAt.toISOString() };
         }
-        const limit = Math.min((0, subscription_planHelpers_1.getMonthlyAIQuota)(sub.tier), env_1.env.freemium.freeMaxAiPerMonth);
+        const limit = env_1.env.freemium.freeMaxAiPerMonth || (0, subscription_planHelpers_1.getMonthlyAIQuota)(sub.tier);
         return {
             isPremium: false,
             used,

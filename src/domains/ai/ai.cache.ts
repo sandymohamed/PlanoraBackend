@@ -1,5 +1,5 @@
-import { GeneratedPlan } from '../../shared/types';
 import { logger } from '../../shared/utils/logger';
+import { PlanGenerationResult } from './ai.generation.types';
 
 const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -14,7 +14,7 @@ export interface CacheKeyInput {
 }
 
 interface CacheEntry {
-  plan: GeneratedPlan;
+  result: PlanGenerationResult;
   expiresAt: number;
 }
 
@@ -32,7 +32,7 @@ export function generateCacheKey(input: CacheKeyInput): string {
   return `${goal}|${category}|${input.durationDays}|${input.hoursPerDay}|${tier}`;
 }
 
-export function getCachedPlan(key: string): GeneratedPlan | null {
+export function getCachedPlan(key: string): PlanGenerationResult | null {
   const entry = cache.get(key);
   if (!entry) return null;
   if (Date.now() > entry.expiresAt) {
@@ -40,12 +40,12 @@ export function getCachedPlan(key: string): GeneratedPlan | null {
     return null;
   }
   logger.info('[AI CACHE HIT]', { key: key.substring(0, 80) });
-  return entry.plan;
+  return entry.result;
 }
 
-export function setCachedPlan(key: string, plan: GeneratedPlan): void {
+export function setCachedPlan(key: string, result: PlanGenerationResult): void {
   cache.set(key, {
-    plan,
+    result,
     expiresAt: Date.now() + TTL_MS,
   });
 }

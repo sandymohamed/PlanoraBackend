@@ -118,8 +118,9 @@ router.post('/generate-plan', async (req, res) => {
         // Enforce the monthly AI quota (free beta: 3 plans/month; premium: unlimited).
         // Throws AuthorizationError (403) when the limit is reached.
         await subscription_service_1.subscriptionService.assertCanUseAI(userId);
-        // Generate the plan using AI
-        const plan = await ai_service_1.aiService.generatePlan(goal.title, goal.description || '', goal.targetDate?.toISOString() || new Date().toISOString(), { ...promptOptions, category: goal.category }, userId);
+        // Generate the plan and keep source/fallback metadata for quota + observability.
+        const generationResult = await ai_service_1.aiService.generatePlan(goal.title, goal.description || '', goal.targetDate?.toISOString() || new Date().toISOString(), { ...promptOptions, category: goal.category, goalId }, userId);
+        const { plan, metadata } = generationResult;
         // Create milestones and tasks in the database
         const createdMilestones = [];
         const createdTasks = [];
@@ -236,22 +237,31 @@ router.post('/generate-plan', async (req, res) => {
             where: { id: goal.id },
             data: {
                 planGenerated: true,
-                planSource: 'AI',
+                planSource: metadata.source === 'AI' ? 'AI' : 'TEMPLATE',
             },
         });
-        // Record the successful generation against the monthly quota.
-        await subscription_service_1.subscriptionService.logAIUsage(userId, 'plan_generation');
+        // Record quota only when a real provider-generated AI plan was returned.
+        if (metadata.quotaConsumed) {
+            await subscription_service_1.subscriptionService.logAIUsage(userId, 'plan_generation');
+        }
         const usage = await subscription_service_1.subscriptionService.getAIUsage(userId);
         (0, posthog_1.trackServerEvent)(userId, 'ai_plan_generated', {
             goalId,
             milestones: createdMilestones.length,
             tasks: createdTasks.length,
+            source: metadata.source,
+            provider: metadata.provider,
+            fallback: metadata.fallback,
+            fallbackReason: metadata.fallbackReason,
+            quotaConsumed: metadata.quotaConsumed,
+            durationMs: metadata.durationMs,
         });
         logger_1.logger.info('AI plan generated successfully', {
             goalId,
             userId,
             milestonesCount: createdMilestones.length,
             tasksCount: createdTasks.length,
+            generation: metadata,
         });
         // Map milestone dueDate to targetDate for frontend compatibility
         const milestonesWithTargetDate = createdMilestones.map((milestone) => ({
@@ -264,6 +274,14 @@ router.post('/generate-plan', async (req, res) => {
                 plan,
                 milestones: milestonesWithTargetDate,
                 tasks: createdTasks,
+                generation: {
+                    source: metadata.source,
+                    provider: metadata.provider,
+                    fallback: metadata.fallback,
+                    fallbackReason: metadata.fallbackReason,
+                    cacheHit: metadata.cacheHit,
+                    durationMs: metadata.durationMs,
+                },
                 remainingPlans: usage.remaining,
                 aiUsage: usage,
             },

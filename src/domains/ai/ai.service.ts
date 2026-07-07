@@ -1,8 +1,10 @@
 import { logger } from '../../shared/utils/logger';
 import { GeneratedPlan, GeneratedMilestone, GeneratedTask } from '../../shared/types';
+import { captureException, captureMessage } from '../../infrastructure/sentry/sentry';
 import { generateCacheKey, getCachedPlan, setCachedPlan } from './ai.cache';
 import { checkAiDailyLimit } from './ai.limits';
 import { generateOfflinePlan } from './ai.offline';
+import { PlanGenerationResult } from './ai.generation.types';
 import {
   computeDurationDays,
   computeHoursPerDay,
@@ -11,6 +13,50 @@ import {
 import { getAIProvider } from './providers/provider.factory';
 import { buildPlanMessages, buildWeeklyReviewMessages } from './ai.prompts';
 import { AI_CONSTANTS } from './ai.constants';
+import { AIProviderError, ChatCompletionResult } from './providers/provider.types';
+
+function classifyFallbackReason(error: unknown): string {
+  if (error instanceof AIProviderError) {
+    if (error.status === 429) return 'PROVIDER_RATE_LIMITED';
+    if (error.status && error.status >= 500) return 'PROVIDER_5XX';
+    if (error.status && error.status >= 400) return 'PROVIDER_4XX';
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes('timeout') || lower.includes('timed out')) return 'PROVIDER_TIMEOUT';
+  if (lower.includes('empty response')) return 'PROVIDER_EMPTY_RESPONSE';
+  if (lower.includes('invalid json') || lower.includes('invalid response format')) return 'PROVIDER_INVALID_JSON';
+  if (lower.includes('not configured') || lower.includes('api key')) return 'PROVIDER_DISABLED';
+  return 'UNKNOWN_PROVIDER_ERROR';
+}
+
+function sentryContext(input: {
+  provider: string;
+  model?: string;
+  category: string;
+  goalId?: string;
+  userId?: string;
+  durationMs: number;
+  fallbackReason: string;
+  error?: unknown;
+}) {
+  return {
+    tags: {
+      feature: 'ai_generation',
+      provider: input.provider,
+      model: input.model,
+      category: input.category,
+    },
+    extra: {
+      goalId: input.goalId,
+      userId: input.userId,
+      duration: input.durationMs,
+      errorType: input.error instanceof Error ? input.error.name : undefined,
+      fallbackReason: input.fallbackReason,
+    },
+  };
+}
 
 class AIService {
   private static instance: AIService;
@@ -36,11 +82,13 @@ class AIService {
       language?: 'en' | 'ar';
       tone?: 'supportive' | 'professional' | 'casual';
       category?: string;
+      goalId?: string;
       /** Subscription tier — part of the cache key (defaults to free) */
       tier?: string;
     } = {},
     userId?: string
-  ): Promise<GeneratedPlan> {
+  ): Promise<PlanGenerationResult> {
+    const startedAt = Date.now();
     const weeklyHours = options.weeklyHours ?? 10;
     const durationDays = computeDurationDays(targetDate);
     const hoursPerDay = computeHoursPerDay(weeklyHours);
@@ -51,7 +99,15 @@ class AIService {
     const cacheKey = generateCacheKey({ goal, category, durationDays, hoursPerDay, tier });
     const cached = getCachedPlan(cacheKey);
     if (cached) {
-      return cached;
+      return {
+        plan: cached.plan,
+        metadata: {
+          ...cached.metadata,
+          cacheHit: true,
+          quotaConsumed: false,
+          durationMs: Date.now() - startedAt,
+        },
+      };
     }
 
     const limit = userId ? checkAiDailyLimit(userId, false) : { forceOffline: false, allowed: true, count: 0, limit: 10 };
@@ -65,28 +121,90 @@ class AIService {
     if (mode === 'offline') {
       // Offline plans are deterministic and cheap — intentionally not cached so
       // the next request can use the provider once quota/availability returns.
-      return generateOfflinePlan({ goal, description: goalDescription, category, durationDays, hoursPerDay });
+      const fallbackReason = provider === null ? 'PROVIDER_DISABLED' : 'DAILY_ONLINE_LIMIT_REACHED';
+      const durationMs = Date.now() - startedAt;
+      captureMessage('AI generation used offline template intentionally', sentryContext({
+        provider: 'none',
+        model: undefined,
+        category,
+        goalId: options.goalId,
+        userId,
+        durationMs,
+        fallbackReason,
+      }));
+      return {
+        plan: generateOfflinePlan({ goal, description: goalDescription, category, durationDays, hoursPerDay }),
+        metadata: {
+          source: 'OFFLINE_TEMPLATE',
+          provider: 'none',
+          fallback: true,
+          fallbackReason,
+          quotaConsumed: false,
+          durationMs,
+          cacheHit: false,
+          status: 'FALLBACK_SUCCESS',
+        },
+      };
     }
 
     try {
       if (userId) {
         checkAiDailyLimit(userId, true);
       }
-      const plan = await this.generatePlanOnline({
+      const result = await this.generatePlanOnline({
         goal,
         durationDays,
         hoursPerDay,
         language: options.language ?? 'en',
       });
+      const durationMs = Date.now() - startedAt;
+      const generationResult: PlanGenerationResult = {
+        plan: result.plan,
+        metadata: {
+          source: 'AI',
+          provider: 'openrouter',
+          model: result.provider.model,
+          fallback: false,
+          quotaConsumed: true,
+          durationMs,
+          cacheHit: false,
+          status: 'SUCCESS',
+        },
+      };
       // Cache successful provider responses only.
-      setCachedPlan(cacheKey, plan);
-      return plan;
+      setCachedPlan(cacheKey, generationResult);
+      return generationResult;
     } catch (error) {
+      const fallbackReason = classifyFallbackReason(error);
+      const durationMs = Date.now() - startedAt;
       logger.warn('[AI FALLBACK TRIGGERED]', {
         error: error instanceof Error ? error.message : String(error),
         goal: goal.substring(0, 60),
+        fallbackReason,
       });
-      return generateOfflinePlan({ goal, description: goalDescription, category, durationDays, hoursPerDay });
+      captureException(error, sentryContext({
+        provider: 'openrouter',
+        model: AI_CONSTANTS.primaryModel,
+        category,
+        goalId: options.goalId,
+        userId,
+        durationMs,
+        fallbackReason,
+        error,
+      }));
+      return {
+        plan: generateOfflinePlan({ goal, description: goalDescription, category, durationDays, hoursPerDay }),
+        metadata: {
+          source: 'OFFLINE_TEMPLATE',
+          provider: 'none',
+          fallback: true,
+          fallbackReason,
+          quotaConsumed: false,
+          durationMs,
+          cacheHit: false,
+          status: 'FALLBACK_SUCCESS',
+        },
+      };
     }
   }
 
@@ -96,7 +214,7 @@ class AIService {
     durationDays: number;
     hoursPerDay: number;
     language: string;
-  }): Promise<GeneratedPlan> {
+  }): Promise<{ plan: GeneratedPlan; provider: ChatCompletionResult }> {
     const provider = getAIProvider();
     if (!provider) {
       throw new Error('No AI provider configured');
@@ -122,7 +240,7 @@ class AIService {
       hoursPerDay: input.hoursPerDay,
     });
 
-    return plan;
+    return { plan, provider: result };
   }
 
   private parseResponse(content: string): GeneratedPlan {

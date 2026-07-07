@@ -27,11 +27,11 @@ function getCachedPlan(key) {
         return null;
     }
     logger_1.logger.info('[AI CACHE HIT]', { key: key.substring(0, 80) });
-    return entry.plan;
+    return entry.result;
 }
-function setCachedPlan(key, plan) {
+function setCachedPlan(key, result) {
     cache.set(key, {
-        plan,
+        result,
         expiresAt: Date.now() + TTL_MS,
     });
 }

@@ -3,7 +3,10 @@
 // import { logger } from './logger';
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.disconnectDatabase = exports.getPrismaClient = exports.connectDatabase = void 0;
+exports.isPrismaConnectionError = isPrismaConnectionError;
+exports.ensureDatabaseReady = ensureDatabaseReady;
 exports.executeWithRetry = executeWithRetry;
+exports.withPrismaRetry = withPrismaRetry;
 // let prisma: PrismaClient;
 // export const connectDatabase = async (): Promise<void> => {
 //   try {
@@ -47,6 +50,61 @@ exports.executeWithRetry = executeWithRetry;
 const client_1 = require("@prisma/client");
 const logger_1 = require("./logger");
 let prisma;
+let reconnectPromise = null;
+function isPrismaConnectionError(error) {
+    const err = error;
+    const message = err?.message ?? '';
+    return (err?.code === 'P1017' ||
+        err?.code === 'P1001' ||
+        err?.code === 'P2037' ||
+        err?.code === 'P1008' ||
+        message.includes('connection') ||
+        message.includes('closed') ||
+        message.includes('connection slots') ||
+        message.includes('Server has closed the connection') ||
+        message.includes('Engine is not yet connected') ||
+        (err?.name === 'PrismaClientUnknownRequestError' && message.includes('not yet connected')));
+}
+async function reconnectDatabaseLocked(maxRetries = 3, retryDelay = 2000) {
+    if (reconnectPromise) {
+        await reconnectPromise;
+        return;
+    }
+    reconnectPromise = (async () => {
+        try {
+            if (prisma) {
+                try {
+                    await prisma.$disconnect();
+                }
+                catch {
+                    // Client may already be disconnected
+                }
+            }
+            prisma = null;
+            await (0, exports.connectDatabase)(maxRetries, retryDelay);
+        }
+        finally {
+            reconnectPromise = null;
+        }
+    })();
+    await reconnectPromise;
+}
+/** Ensure Prisma is connected before background jobs run. Safe to call repeatedly. */
+async function ensureDatabaseReady() {
+    if (!prisma) {
+        await (0, exports.connectDatabase)();
+        return;
+    }
+    try {
+        await Promise.race([
+            prisma.$queryRaw `SELECT 1`,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Connection test timeout')), 2000)),
+        ]);
+    }
+    catch {
+        await reconnectDatabaseLocked();
+    }
+}
 const connectDatabase = async (maxRetries = 5, retryDelay = 5000) => {
     // If prisma client already exists and is connected, don't reconnect
     if (prisma) {
@@ -168,41 +226,17 @@ async function executeWithRetry(operation, maxRetries = 3, retryDelay = 1000) {
         }
         catch (error) {
             lastError = error;
-            // Check if it's a connection error
-            const isConnectionError = error?.code === 'P1017' || // Server has closed the connection
-                error?.code === 'P1001' || // Can't reach database server
-                error?.code === 'P2037' || // Too many database connections
-                error?.code === 'P1008' || // Operations timed out
-                error?.message?.includes('connection') ||
-                error?.message?.includes('closed') ||
-                error?.message?.includes('connection slots') ||
-                error?.message?.includes('Server has closed the connection');
-            if (isConnectionError && attempt < maxRetries) {
+            if (isPrismaConnectionError(error) && attempt < maxRetries) {
                 logger_1.logger.warn(`Database connection error (attempt ${attempt}/${maxRetries}), retrying...`, {
                     error: error.message,
                     code: error.code,
                 });
-                // Try to reconnect - disconnect first if client exists
                 try {
-                    if (prisma) {
-                        try {
-                            await prisma.$disconnect();
-                        }
-                        catch (disconnectError) {
-                            // Ignore disconnect errors - client might already be disconnected
-                            logger_1.logger.debug('Error disconnecting (expected if already disconnected):', disconnectError);
-                        }
-                    }
-                    // Clear the client reference
-                    prisma = null;
-                    // Reconnect with fewer retries and shorter delay
-                    await (0, exports.connectDatabase)(3, 2000);
+                    await reconnectDatabaseLocked(3, 2000);
                 }
                 catch (reconnectError) {
                     logger_1.logger.error('Failed to reconnect to database:', reconnectError);
-                    // Continue to retry the operation anyway - might work if connection was restored
                 }
-                // Wait before retrying with exponential backoff
                 await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
                 continue;
             }
@@ -211,6 +245,13 @@ async function executeWithRetry(operation, maxRetries = 3, retryDelay = 1000) {
         }
     }
     throw lastError;
+}
+/**
+ * Run a Prisma operation with retry, always resolving a fresh client on each attempt.
+ * Use this instead of closing over getPrismaClient() when parallel jobs may reconnect.
+ */
+async function withPrismaRetry(operation, maxRetries = 3, retryDelay = 1000) {
+    return executeWithRetry(() => operation((0, exports.getPrismaClient)()), maxRetries, retryDelay);
 }
 const disconnectDatabase = async () => {
     if (prisma) {

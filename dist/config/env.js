@@ -16,7 +16,8 @@ exports.env = {
         expiresIn: process.env.JWT_EXPIRES_IN || '15m',
         refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
     },
-    corsOrigins: (process.env.CORS_ORIGIN || 'http://localhost:8081').split(',').map((s) => s.trim()),
+    // corsOrigins: (process.env.CORS_ORIGIN || 'http://localhost:8081').split(',').map((s) => s.trim()),
+    corsOrigins: (process.env.CORS_ORIGIN || "*").split(',').map((s) => s.trim()),
     rateLimit: {
         windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
         maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '120', 10),

@@ -1,4 +1,4 @@
-import { getPrismaClient, executeWithRetry } from '../../shared/utils/database';
+import { getPrismaClient, executeWithRetry, ensureDatabaseReady, withPrismaRetry } from '../../shared/utils/database';
 import { logger } from '../../shared/utils/logger';
 import { scheduleReminder } from './queue.service';
 import { scheduleNotification } from './queue.service';
@@ -1007,12 +1007,11 @@ export async function scheduleRoutineTaskNotifications(
   reminderBefore?: string | null
 ): Promise<void> {
   try {
-    const prisma = getPrismaClient();
     const now = new Date();
 
     // Cancel existing reminders for this routine task
     // Since targetId is null for CUSTOM type (due to FK constraint), match by note content
-    await executeWithRetry(async () => {
+    await withPrismaRetry(async (prisma) => {
       return await prisma.reminder.deleteMany({
       where: {
         targetType: 'CUSTOM',
@@ -1145,7 +1144,7 @@ export async function scheduleRoutineTaskNotifications(
     };
 
     // Create reminder record
-    const reminder = await executeWithRetry(async () => {
+    const reminder = await withPrismaRetry(async (prisma) => {
       return await prisma.reminder.create({
       data: {
         userId,
@@ -1414,7 +1413,6 @@ export async function scheduleRoutineReminderNotification(
   nextOccurrence: Date
 ): Promise<void> {
   try {
-    const prisma = getPrismaClient();
     const now = new Date();
 
     // Parse reminderBefore (e.g., "30m", "2h", "1d", "1w")
@@ -1476,7 +1474,7 @@ export async function scheduleRoutineReminderNotification(
     }
 
     // Cancel existing routine reminder notifications
-    await executeWithRetry(async () => {
+    await withPrismaRetry(async (prisma) => {
       return await prisma.reminder.deleteMany({
       where: {
         targetType: 'CUSTOM',
@@ -1504,7 +1502,7 @@ export async function scheduleRoutineReminderNotification(
     }
 
     // Create reminder record
-    const reminder = await executeWithRetry(async () => {
+    const reminder = await withPrismaRetry(async (prisma) => {
       return await prisma.reminder.create({
       data: {
         userId,
@@ -1553,38 +1551,14 @@ export async function scheduleRoutineNotifications(
   _userId: string
 ): Promise<void> {
   try {
-    const prisma = getPrismaClient();
-    
-    // Retry logic for connection errors
-    let routine;
-    let retries = 0;
-    const maxRetries = 3;
-    
-    while (retries < maxRetries) {
-      try {
-        routine = await prisma.routine.findUnique({
-          where: { id: routineId },
-          include: { routineTasks: true },
-        });
-        break; // Success, exit retry loop
-      } catch (error: any) {
-        const isConnectionError = 
-          error?.code === 'P1017' || 
-          error?.message?.includes('connection') ||
-          error?.message?.includes('closed');
-        
-        if (isConnectionError && retries < maxRetries - 1) {
-          retries++;
-          logger.warn(`Database connection error when fetching routine (attempt ${retries}/${maxRetries}), retrying...`, {
-            routineId,
-            error: error.message,
-          });
-          await new Promise(resolve => setTimeout(resolve, 1000 * retries));
-          continue;
-        }
-        throw error; // Re-throw if not connection error or max retries reached
-      }
-    }
+    await ensureDatabaseReady();
+
+    const routine = await withPrismaRetry((prisma) =>
+      prisma.routine.findUnique({
+        where: { id: routineId },
+        include: { routineTasks: true },
+      })
+    );
 
     if (!routine || !routine.enabled) {
       logger.info(`Routine ${routineId} not found or disabled, skipping notification scheduling`);
@@ -1698,11 +1672,9 @@ async function createAlarmForRoutineReminder(
   reminderBefore?: string | null
 ): Promise<void> {
   try {
-    const prisma = getPrismaClient();
-    
     // Cancel existing alarms for this routine task
     try {
-      await executeWithRetry(async () => {
+      await withPrismaRetry(async (prisma) => {
         return await prisma.alarm.deleteMany({
         where: {
           userId,
@@ -1893,7 +1865,7 @@ async function createAlarmForRoutineReminder(
     // Create the alarm with error handling for database connection issues
     let alarm;
     try {
-      alarm = await executeWithRetry(async () => {
+      alarm = await withPrismaRetry(async (prisma) => {
         return await prisma.alarm.create({
         data: {
           userId,
@@ -1953,7 +1925,7 @@ async function createAlarmForRoutineReminder(
     // Store alarm ID in reminder schedule for reference
     // Use try-catch to handle potential database connection issues
     try {
-      await executeWithRetry(async () => {
+      await withPrismaRetry(async (prisma) => {
         return await prisma.reminder.updateMany({
         where: {
           userId,

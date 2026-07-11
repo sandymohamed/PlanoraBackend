@@ -20,7 +20,12 @@ const waitlistSchema = Joi.object({
 
 /** POST /api/v1/waitlist — public premium waitlist signup */
 router.post('/', async (req: Request, res: Response) => {
+
+  console.log('lol Waitlist signup', { body: req.body });
+
   const { error, value } = waitlistSchema.validate(req.body);
+  console.log("WAITLIST ERROR:", error)
+  console.log("WAITLIST VALUE:", value)
   if (error) {
     throw new ValidationError(error.details[0].message);
   }

@@ -293,7 +293,7 @@ class EmailService {
         body: JSON.stringify(payload),
       });
 
-      const responseData = await response.json();
+      const responseData: any = await response.json();
 
       if (!response.ok) {
         logger.error("Brevo API error", {
@@ -305,7 +305,7 @@ class EmailService {
 
       logger.info("Email sent via Brevo API successfully", {
         to: options.to,
-        messageId: responseData.messageId,
+        messageId: responseData?.messageId,
       });
 
       return true;

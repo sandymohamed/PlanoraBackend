@@ -34,6 +34,7 @@
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^6.9.16",
     "openai": "^4.104.0",
+    "resend": "^6.17.2",
     "uuid": "^9.0.1",
     "winston": "^3.11.0"
   },

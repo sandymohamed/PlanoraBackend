@@ -48,6 +48,7 @@ const createTaskSchema = Joi.object({
 
 // GET /api/v1/routines
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+
   try {
     const userId = req.user!.id;
     const routines = await routineService.getUserRoutines(userId);
@@ -68,10 +69,13 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 
 // POST /api/v1/routines
 router.post('/', async (req: AuthenticatedRequest, res: Response) => {
+  console.log('Creating routine with request body:', req.body);
   try {
+    
     const userId = req.user!.id;
     const { error, value } = createRoutineSchema.validate(req.body);
     
+    console.log('Creating routine with request value:', value);
     if (error) {
       return res.status(400).json({
         success: false,
@@ -91,6 +95,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     
     const routine = await routineService.createRoutine(userId, value as CreateRoutineData);
     
+    console.log(`Routine created: ${routine.id} for user ${userId}`, routine);
     // Automatically create one task for the routine using routine title and description
     try {
       await routineService.addTaskToRoutine(routine.id, userId, {
@@ -114,6 +119,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
           throw getError;
         }
       }
+      
       
       // Schedule notifications for the routine
       if (routineWithTask && routineWithTask.enabled) {

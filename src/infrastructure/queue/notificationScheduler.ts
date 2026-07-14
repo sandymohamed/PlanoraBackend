@@ -1510,8 +1510,8 @@ logger.info(`Scheduling routine reminder notification for routine ${routineId}`,
         userId,
         targetType: 'CUSTOM',
         targetId: null,
-        title: `Routine Reminder: ${routineTitle}`,
-        note: `Your routine "${routineTitle}" is coming up soon`,
+        title: `Habbits Reminder: ${routineTitle}`,
+        note: `Your habbits "${routineTitle}" is coming up soon`,
         triggerType: 'TIME',
         schedule: reminderSchedule as any,
       },
@@ -1561,6 +1561,7 @@ export async function scheduleRoutineNotifications(
         include: { routineTasks: true },
       })
     );
+    logger.info(`scheduleRoutineNotifications routine`, routine)
 
     if (!routine || !routine.enabled) {
       logger.info(`Routine ${routineId} not found or disabled, skipping notification scheduling`);
@@ -1570,6 +1571,10 @@ export async function scheduleRoutineNotifications(
     const schedule = routine.schedule as any;
 
     // Calculate next occurrence for the routine
+
+    logger.info(`**** Calculating next occurrence for routine ${routineId} ** `, routine);
+
+
     const now = new Date();
     let nextOccurrence: Date | null = null;
     const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);

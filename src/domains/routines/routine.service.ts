@@ -239,6 +239,7 @@ export class RoutineService {
   async addTaskToRoutine(routineId: string, userId: string, taskData: CreateRoutineTaskData) {
     const prisma = getPrismaClient();
     
+    logger.info("addTaskToRoutine taskData:", taskData);
     // Verify ownership
     const routine = await prisma.routine.findFirst({
       where: {

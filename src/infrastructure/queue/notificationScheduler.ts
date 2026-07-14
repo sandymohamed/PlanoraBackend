@@ -30,6 +30,224 @@ const ALARM_NOTIFICATION_TYPE = 'ALARM_TRIGGER';
  * @param taskTitle - Task title
  * @param dueTime - Optional time string (HH:mm format)
  */
+// export async function scheduleTaskDueDateNotifications(
+//   taskId: string,
+//   userId: string,
+//   dueDate: Date,
+//   taskTitle: string,
+//   dueTime?: string | null
+// ): Promise<void> {
+//   try {
+//     logger.info('scheduleTaskDueDateNotifications called', { taskId, userId, dueDate, dueTime });
+//     const prisma = getPrismaClient();
+    
+//     // Delete existing reminders for this task to avoid duplicates
+//     await executeWithRetry(async () => {
+//       return await prisma.reminder.deleteMany({
+//       where: {
+//         targetType: 'TASK',
+//         targetId: taskId,
+//         userId,
+//       },
+//       });
+//     });
+    
+//     // Delete existing alarms for this task to avoid duplicates
+//     await executeWithRetry(async () => {
+//       return await prisma.alarm.deleteMany({
+//         where: {
+//           userId,
+//           linkedTaskId: taskId,
+//         },
+//       });
+//     }).catch(err => {
+//       logger.warn(`Failed to delete existing alarms for task ${taskId}, continuing anyway:`, err);
+//     });
+
+//     const now = new Date();
+//     // const dueDateTime = new Date(dueDate);
+//     const dueDateTime = dueDate; // send timezone UTC
+    
+//     // If dueTime is provided, combine it with dueDate
+//     if (dueTime) {
+//       const [hours, minutes] = dueTime.split(':').map(Number);
+//       dueDateTime.setHours(hours, minutes, 0, 0);
+//       logger.info('Combined due date with time', { dueDateTime: dueDateTime.toISOString(), hours, minutes });
+//     } else {
+//       // If no time specified, use end of day (23:59)
+//       dueDateTime.setHours(23, 59, 0, 0);
+//       logger.info('No due time specified, using end of day', { dueDateTime: dueDateTime.toISOString() });
+//     }
+    
+//     // Only schedule if due date is in the future
+//     if (dueDateTime <= now) {
+//       logger.warn(`Task ${taskId} due date is in the past, skipping notification scheduling`, { 
+//         dueDateTime: dueDateTime.toISOString(), 
+//         now: now.toISOString() 
+//       });
+//       return;
+//     }
+
+//     // Calculate reminder times
+//     // const oneDayBefore = new Date(dueDateTime);
+//     const oneDayBefore = dueDateTime; // send timezone UTC
+//     oneDayBefore.setDate(oneDayBefore.getDate() - 1);
+    
+//     // const oneHourBefore = new Date(dueDateTime);
+//     const oneHourBefore = dueDateTime; // send timezone UTC
+//     oneHourBefore.setHours(oneHourBefore.getHours() - 1);
+
+//     // Schedule reminders
+//     const reminders = [];
+
+//     // 1 day before (if more than 1 hour away and in the future)
+//     if (oneDayBefore > now && oneDayBefore < dueDateTime) {
+//       try {
+//         const reminder1 = await executeWithRetry(async () => {
+//           return await prisma.reminder.create({
+//           data: {
+//             userId,
+//             targetType: 'TASK',
+//             targetId: taskId,
+//             title: `Task Due Tomorrow: ${taskTitle}`,
+//             note: `Your task "${taskTitle}" is due tomorrow.`,
+//             triggerType: 'TIME',
+//             schedule: {
+//               at: oneDayBefore.toISOString(),
+//             },
+//           },
+//           });
+//         });
+//         reminders.push({ reminder: reminder1, time: oneDayBefore, type: 'DUE_DATE_REMINDER' });
+//         logger.info(`Created 1-day-before reminder for task ${taskId} at ${oneDayBefore.toISOString()}`);
+//       } catch (error) {
+//         logger.error(`Failed to create 1-day-before reminder for task ${taskId}:`, error);
+//       }
+//     }
+
+//     // 1 hour before (if more than now and in the future)
+//     if (oneHourBefore > now && oneHourBefore < dueDateTime) {
+//       try {
+//         const reminder2 = await executeWithRetry(async () => {
+//           return await prisma.reminder.create({
+//           data: {
+//             userId,
+//             targetType: 'TASK',
+//             targetId: taskId,
+//             title: `Task Due in 1 Hour: ${taskTitle}`,
+//             note: `Your task "${taskTitle}" is due in 1 hour.`,
+//             triggerType: 'TIME',
+//             schedule: {
+//               at: oneHourBefore.toISOString(),
+//             },
+//           },
+//           });
+//         });
+//         reminders.push({ reminder: reminder2, time: oneHourBefore, type: 'DUE_DATE_REMINDER' });
+//         logger.info(`Created 1-hour-before reminder for task ${taskId} at ${oneHourBefore.toISOString()}`);
+//       } catch (error) {
+//         logger.error(`Failed to create 1-hour-before reminder for task ${taskId}:`, error);
+//       }
+//     }
+
+//     // Always schedule "at due time" reminder if due date is in the future
+//     try {
+//       const reminder3 = await executeWithRetry(async () => {
+//         return await prisma.reminder.create({
+//         data: {
+//           userId,
+//           targetType: 'TASK',
+//           targetId: taskId,
+//           title: `Task Due: ${taskTitle}`,
+//           note: `Your task "${taskTitle}" is due now.`,
+//           triggerType: 'TIME',
+//           schedule: {
+//             at: dueDateTime.toISOString(),
+//           },
+//         },
+//         });
+//       });
+//       reminders.push({ reminder: reminder3, time: dueDateTime, type: 'DUE_DATE_REMINDER' });
+//       logger.info(`Created due-time reminder for task ${taskId} at ${dueDateTime.toISOString()}`);
+      
+//       // Also create an alarm record so it can be scheduled as a native alarm on the device
+//       try {
+//         // Delete existing alarms for this task to avoid duplicates
+//         await executeWithRetry(async () => {
+//           return await prisma.alarm.deleteMany({
+//             where: {
+//               userId,
+//               linkedTaskId: taskId,
+//             },
+//           });
+//         });
+        
+//         // Get user timezone (default to UTC if not available)
+//         const user = await executeWithRetry(async () => {
+//           return await prisma.user.findUnique({
+//             where: { id: userId },
+//             select: { timezone: true },
+//           });
+//         }).catch(() => null);
+//         const userTimezone = user?.timezone || 'UTC';
+        
+//         // Create alarm record for native alarm scheduling
+//         await executeWithRetry(async () => {
+//           return await prisma.alarm.create({
+//             data: {
+//               userId,
+//               title: `Task Due: ${taskTitle}`,
+//               time: dueDateTime,
+//               timezone: userTimezone,
+//               linkedTaskId: taskId,
+//               enabled: true,
+//               recurrenceRule: null, // Tasks are typically one-time
+//             },
+//           });
+//         });
+//         logger.info(`Created alarm record for task ${taskId} at ${dueDateTime.toISOString()}`);
+//       } catch (alarmError) {
+//         logger.error(`Failed to create alarm record for task ${taskId}:`, alarmError);
+//         // Don't fail the whole operation if alarm creation fails
+//       }
+//     } catch (error) {
+//       logger.error(`Failed to create due-time reminder for task ${taskId}:`, error);
+//     }
+
+//     // Schedule all reminders
+//     logger.info(`Scheduling ${reminders.length} reminders for task ${taskId}`);
+//     for (const { reminder, time, type } of reminders) {
+//       try {
+//         await scheduleReminder(reminder.id, userId, time, type);
+//         logger.info(`Successfully scheduled task reminder for ${taskId} at ${time.toISOString()}, type: ${type}`);
+//       } catch (error: any) {
+//         logger.error(`Failed to schedule reminder for task ${taskId}:`, error);
+//         // Clean up reminder if scheduling failed
+//         await executeWithRetry(async () => {
+//           return await prisma.reminder.delete({ where: { id: reminder.id } });
+//         }).catch(() => {});
+//       }
+//     }
+    
+//     if (reminders.length === 0) {
+//       logger.warn(`No reminders scheduled for task ${taskId} - all reminder times are in the past`);
+//     }
+//   } catch (error) {
+//     logger.error(`Failed to schedule task due date notifications for ${taskId}:`, error);
+//     // Don't throw - this shouldn't break task creation
+//   }
+// }
+
+
+/**
+ * Schedule notifications for task due dates
+ * Creates reminders for: 1 day before, 1 hour before, and at due time
+ * @param taskId - Task ID
+ * @param userId - User ID to send notifications to
+ * @param dueDate - Due date in UTC (already includes the correct time)
+ * @param taskTitle - Task title
+ * @param dueTime - Optional time string (HH:mm format) - UI ONLY, NEVER use for scheduling
+ */
 export async function scheduleTaskDueDateNotifications(
   taskId: string,
   userId: string,
@@ -44,11 +262,11 @@ export async function scheduleTaskDueDateNotifications(
     // Delete existing reminders for this task to avoid duplicates
     await executeWithRetry(async () => {
       return await prisma.reminder.deleteMany({
-      where: {
-        targetType: 'TASK',
-        targetId: taskId,
-        userId,
-      },
+        where: {
+          targetType: 'TASK',
+          targetId: taskId,
+          userId,
+        },
       });
     });
     
@@ -65,19 +283,18 @@ export async function scheduleTaskDueDateNotifications(
     });
 
     const now = new Date();
-    // const dueDateTime = new Date(dueDate);
-    const dueDateTime = dueDate; // send timezone UTC
     
-    // If dueTime is provided, combine it with dueDate
-    if (dueTime) {
-      const [hours, minutes] = dueTime.split(':').map(Number);
-      dueDateTime.setHours(hours, minutes, 0, 0);
-      logger.info('Combined due date with time', { dueDateTime: dueDateTime.toISOString(), hours, minutes });
-    } else {
-      // If no time specified, use end of day (23:59)
-      dueDateTime.setHours(23, 59, 0, 0);
-      logger.info('No due time specified, using end of day', { dueDateTime: dueDateTime.toISOString() });
-    }
+    // ✅ FIX: Use dueDate as-is (it already has the correct UTC time)
+    // The dueTime parameter is ONLY for UI display, NEVER for scheduling
+    const dueDateTime = new Date(dueDate);
+    
+    // Log the actual due time in UTC and in user's timezone for debugging
+    logger.info('Due date information', {
+      dueDateUTC: dueDateTime.toISOString(),
+      dueDateLocal: dueDateTime.toLocaleString('en-US', { timeZone: 'Africa/Cairo' }),
+      dueTimeProvided: dueTime || 'none',
+      note: 'dueTime is for UI display only - scheduling uses dueDate directly'
+    });
     
     // Only schedule if due date is in the future
     if (dueDateTime <= now) {
@@ -88,13 +305,11 @@ export async function scheduleTaskDueDateNotifications(
       return;
     }
 
-    // Calculate reminder times
-    // const oneDayBefore = new Date(dueDateTime);
-    const oneDayBefore = dueDateTime; // send timezone UTC
+    // Calculate reminder times based on the dueDateTime
+    const oneDayBefore = new Date(dueDateTime);
     oneDayBefore.setDate(oneDayBefore.getDate() - 1);
     
-    // const oneHourBefore = new Date(dueDateTime);
-    const oneHourBefore = dueDateTime; // send timezone UTC
+    const oneHourBefore = new Date(dueDateTime);
     oneHourBefore.setHours(oneHourBefore.getHours() - 1);
 
     // Schedule reminders
@@ -105,17 +320,17 @@ export async function scheduleTaskDueDateNotifications(
       try {
         const reminder1 = await executeWithRetry(async () => {
           return await prisma.reminder.create({
-          data: {
-            userId,
-            targetType: 'TASK',
-            targetId: taskId,
-            title: `Task Due Tomorrow: ${taskTitle}`,
-            note: `Your task "${taskTitle}" is due tomorrow.`,
-            triggerType: 'TIME',
-            schedule: {
-              at: oneDayBefore.toISOString(),
+            data: {
+              userId,
+              targetType: 'TASK',
+              targetId: taskId,
+              title: `Task Due Tomorrow: ${taskTitle}`,
+              note: `Your task "${taskTitle}" is due tomorrow.`,
+              triggerType: 'TIME',
+              schedule: {
+                at: oneDayBefore.toISOString(),
+              },
             },
-          },
           });
         });
         reminders.push({ reminder: reminder1, time: oneDayBefore, type: 'DUE_DATE_REMINDER' });
@@ -130,17 +345,17 @@ export async function scheduleTaskDueDateNotifications(
       try {
         const reminder2 = await executeWithRetry(async () => {
           return await prisma.reminder.create({
-          data: {
-            userId,
-            targetType: 'TASK',
-            targetId: taskId,
-            title: `Task Due in 1 Hour: ${taskTitle}`,
-            note: `Your task "${taskTitle}" is due in 1 hour.`,
-            triggerType: 'TIME',
-            schedule: {
-              at: oneHourBefore.toISOString(),
+            data: {
+              userId,
+              targetType: 'TASK',
+              targetId: taskId,
+              title: `Task Due in 1 Hour: ${taskTitle}`,
+              note: `Your task "${taskTitle}" is due in 1 hour.`,
+              triggerType: 'TIME',
+              schedule: {
+                at: oneHourBefore.toISOString(),
+              },
             },
-          },
           });
         });
         reminders.push({ reminder: reminder2, time: oneHourBefore, type: 'DUE_DATE_REMINDER' });
@@ -154,41 +369,33 @@ export async function scheduleTaskDueDateNotifications(
     try {
       const reminder3 = await executeWithRetry(async () => {
         return await prisma.reminder.create({
-        data: {
-          userId,
-          targetType: 'TASK',
-          targetId: taskId,
-          title: `Task Due: ${taskTitle}`,
-          note: `Your task "${taskTitle}" is due now.`,
-          triggerType: 'TIME',
-          schedule: {
-            at: dueDateTime.toISOString(),
+          data: {
+            userId,
+            targetType: 'TASK',
+            targetId: taskId,
+            title: `Task Due: ${taskTitle}`,
+            note: `Your task "${taskTitle}" is due now.`,
+            triggerType: 'TIME',
+            schedule: {
+              at: dueDateTime.toISOString(),
+            },
           },
-        },
         });
       });
       reminders.push({ reminder: reminder3, time: dueDateTime, type: 'DUE_DATE_REMINDER' });
       logger.info(`Created due-time reminder for task ${taskId} at ${dueDateTime.toISOString()}`);
       
-      // Also create an alarm record so it can be scheduled as a native alarm on the device
+      // Create alarm record for native alarm scheduling
       try {
-        // Delete existing alarms for this task to avoid duplicates
-        await executeWithRetry(async () => {
-          return await prisma.alarm.deleteMany({
-            where: {
-              userId,
-              linkedTaskId: taskId,
-            },
-          });
-        });
-        
-        // Get user timezone (default to UTC if not available)
+        // Get user timezone for the alarm
         const user = await executeWithRetry(async () => {
           return await prisma.user.findUnique({
             where: { id: userId },
             select: { timezone: true },
           });
         }).catch(() => null);
+        
+        // Use the user's timezone or fallback to UTC
         const userTimezone = user?.timezone || 'UTC';
         
         // Create alarm record for native alarm scheduling
@@ -197,15 +404,15 @@ export async function scheduleTaskDueDateNotifications(
             data: {
               userId,
               title: `Task Due: ${taskTitle}`,
-              time: dueDateTime,
-              timezone: userTimezone,
+              time: dueDateTime, // Store the UTC time
+              timezone: userTimezone, // Store the user's timezone for display
               linkedTaskId: taskId,
               enabled: true,
               recurrenceRule: null, // Tasks are typically one-time
             },
           });
         });
-        logger.info(`Created alarm record for task ${taskId} at ${dueDateTime.toISOString()}`);
+        logger.info(`Created alarm record for task ${taskId} at ${dueDateTime.toISOString()} with timezone ${userTimezone}`);
       } catch (alarmError) {
         logger.error(`Failed to create alarm record for task ${taskId}:`, alarmError);
         // Don't fail the whole operation if alarm creation fails
@@ -237,6 +444,7 @@ export async function scheduleTaskDueDateNotifications(
     // Don't throw - this shouldn't break task creation
   }
 }
+
 
 /**
  * Schedule notifications for milestone due dates

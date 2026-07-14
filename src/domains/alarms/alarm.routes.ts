@@ -4,7 +4,7 @@ import { getPrismaClient } from '../../shared/utils/database';
 import { authenticateToken } from '../../shared/middleware/auth';
 import { AuthenticatedRequest, ValidationError, NotFoundError } from '../../shared/types';
 import { logger } from '../../shared/utils/logger';
-import { scheduleAlarmPushNotification, cancelAlarmPushNotifications, cancelAllPendingAlarmNotifications } from '../../infrastructure/queue/notificationScheduler';
+import { cancelAlarmPushNotifications, cancelAllPendingAlarmNotifications } from '../../infrastructure/queue/notificationScheduler';
 
 const router = Router();
 
@@ -115,6 +115,8 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
 // POST /api/v1/alarms
 router.post('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    logger.info('Creating new alarm for user', { userId: req.user!.id, requestBody: req.body });
+
     const { error, value } = createAlarmSchema.validate(req.body);
     if (error) {
       throw new ValidationError(error.details[0].message);
@@ -131,7 +133,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       },
     });
 
-    logger.info('Alarm created successfully', { alarmId: alarm.id, userId });
+    logger.info('Alarm created successfully', { alarmId: alarm.id, value });
 
     // NOTE: Backend push notifications are DISABLED for alarms
     // Native Android AlarmManager handles all alarm ringing via AlarmPlayerService

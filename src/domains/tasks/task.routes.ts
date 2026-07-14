@@ -344,6 +344,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       },
     });
 
+    console.log('Task created successfully', task);
     const notificationScheduler = await import('../../infrastructure/queue/notificationScheduler');
 
     // Schedule notifications for due date if provided
@@ -355,7 +356,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         userId: taskUserId, 
         dueDate: task.dueDate, 
         dueTime 
-      });
+      }, task);
       notificationScheduler.scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
         .catch(err => logger.error('Failed to schedule task notifications:', err));
     }
@@ -509,6 +510,7 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
       const { scheduleTaskDueDateNotifications } = await import('../../infrastructure/queue/notificationScheduler');
       const taskUserId = task.assigneeId || task.creatorId;
       const dueTime = value.dueTime !== undefined ? value.dueTime : (task.dueTime || null);
+     
       logger.info('Rescheduling task notifications', { 
         taskId: task.id, 
         userId: taskUserId, 

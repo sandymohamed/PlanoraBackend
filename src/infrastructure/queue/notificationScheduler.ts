@@ -65,7 +65,8 @@ export async function scheduleTaskDueDateNotifications(
     });
 
     const now = new Date();
-    const dueDateTime = new Date(dueDate);
+    // const dueDateTime = new Date(dueDate);
+    const dueDateTime = dueDate; // send timezone UTC
     
     // If dueTime is provided, combine it with dueDate
     if (dueTime) {
@@ -88,10 +89,12 @@ export async function scheduleTaskDueDateNotifications(
     }
 
     // Calculate reminder times
-    const oneDayBefore = new Date(dueDateTime);
+    // const oneDayBefore = new Date(dueDateTime);
+    const oneDayBefore = dueDateTime; // send timezone UTC
     oneDayBefore.setDate(oneDayBefore.getDate() - 1);
     
-    const oneHourBefore = new Date(dueDateTime);
+    // const oneHourBefore = new Date(dueDateTime);
+    const oneHourBefore = dueDateTime; // send timezone UTC
     oneHourBefore.setHours(oneHourBefore.getHours() - 1);
 
     // Schedule reminders
@@ -263,7 +266,8 @@ export async function scheduleMilestoneDueDateNotifications(
     });
 
     const now = new Date();
-    const dueDateTime = new Date(dueDate);
+    // const dueDateTime = new Date(dueDate);
+    const dueDateTime = dueDate; // send timezone UTC
     
     // Set to end of day (23:59) if no specific time is provided
     // This ensures notifications are sent at the end of the milestone due date
@@ -276,10 +280,12 @@ export async function scheduleMilestoneDueDateNotifications(
     }
 
     // Calculate reminder times
-    const oneDayBefore = new Date(dueDateTime);
+    // const oneDayBefore = new Date(dueDateTime);
+    const oneDayBefore = dueDateTime; // send timezone UTC
     oneDayBefore.setDate(oneDayBefore.getDate() - 1);
     
-    const oneHourBefore = new Date(dueDateTime);
+    // const oneHourBefore = new Date(dueDateTime);
+    const oneHourBefore = dueDateTime; // send timezone UTC
     oneHourBefore.setHours(oneHourBefore.getHours() - 1);
 
     const reminders = [];

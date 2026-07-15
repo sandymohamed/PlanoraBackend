@@ -1663,6 +1663,9 @@ async function createAlarmForRoutineReminder(
       recurrenceRule = `FREQ=MONTHLY;BYMONTHDAY=${schedule.day}`;
     }
 
+    logger.info(`Creating alarm for routine task reminder`, {
+      routineId,
+      taskId,});
     // Create the alarm
     const alarm = await withPrismaRetry(async (prisma) => {
       return await prisma.alarm.create({
@@ -1672,7 +1675,7 @@ async function createAlarmForRoutineReminder(
           time: alarmTime,
           timezone: timezone || "UTC",
           recurrenceRule,
-          linkedTaskId: taskId,
+          linkedTaskId: taskId || null,
           enabled: true,
           snoozeConfig: {
             duration: 5,
@@ -2103,21 +2106,21 @@ export async function scheduleRoutineNotifications(
     }
 
     // Schedule notifications for each task
-    // for (const task of routine.routineTasks) {
-    //   logger.debug("inside scheduleRoutineNotifications loop task is:", task)
-    //   await scheduleRoutineTaskNotifications(
-    //     routine.id,
-    //     routine.userId,
-    //     routine.title,
-    //     routine.frequency,
-    //     schedule,
-    //     routine.timezone,
-    //     task.id,
-    //     task.title,
-    //     task.reminderTime,
-    //     routine.reminderBefore,
-    //   );
-    // }
+    for (const task of routine.routineTasks) {
+      logger.debug("inside scheduleRoutineNotifications loop task is:", task)
+      await scheduleRoutineTaskNotifications(
+        routine.id,
+        routine.userId,
+        routine.title,
+        routine.frequency,
+        schedule,
+        routine.timezone,
+        task.id,
+        task.title,
+        task.reminderTime,
+        routine.reminderBefore,
+      );
+    }
 
     logger.info(
       `Scheduled notifications for all tasks in routine ${routineId}`,

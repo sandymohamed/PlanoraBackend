@@ -17,7 +17,7 @@ const createRoutineSchema = Joi.object({
   description: Joi.string().trim().allow('', null).optional(),
   frequency: Joi.string().valid('DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY').required(),
   schedule: Joi.object({
-    time: Joi.string().pattern(/^\d{2}:\d{2}$/).optional(),
+    time: Joi.string().pattern(/^\d{2}:\d{2}$/).optional(), // Expecting UTC time in HH:mm format
     days: Joi.array().items(Joi.number().min(0).max(6)).optional(),
     day: Joi.number().min(1).max(31).optional(),
   }).required(),

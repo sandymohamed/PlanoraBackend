@@ -214,7 +214,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /api/v1/tasks/:id
-router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:id', async (req:any, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;

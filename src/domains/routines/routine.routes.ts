@@ -123,8 +123,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       
       // Schedule notifications for the routine
       if (routineWithTask && routineWithTask.enabled) {
+        console.log(`**** routineWithTask Scheduling notifications for routine ${routine.id} for user ${userId}`);
         scheduleRoutineNotifications(routine.id, userId)
-          .catch(err => logger.error('Failed to schedule routine notifications:', err));
+        .catch(err => logger.error('Failed to schedule routine notifications:', err));
       }
       
       return res.status(201).json({
@@ -136,6 +137,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       // If task creation fails, still return the routine but log the error
       // Schedule notifications anyway
       if (routine.enabled) {
+        console.log(`**** routine.enabled Scheduling notifications for routine ${routine.id} for user ${userId}`);
         scheduleRoutineNotifications(routine.id, userId)
           .catch(err => logger.error('Failed to schedule routine notifications:', err));
       }

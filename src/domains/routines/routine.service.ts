@@ -80,6 +80,7 @@ export class RoutineService {
       orderBy: { createdAt: 'desc' },
     });
 
+    logger.info(`scheduleRoutineNotifications from getUserRoutines for user ${userId} with ${routines.length} routines`);
     // Reschedule reminders for routines that have reminderBefore but might not have reminders yet
     // Run sequentially to avoid Prisma reconnect races when many routines need scheduling
     const { scheduleRoutineNotifications } = await import('../../infrastructure/queue/notificationScheduler');
@@ -103,6 +104,8 @@ export class RoutineService {
           );
 
           if (reminderCount === 0) {
+                logger.info(`2222 scheduleRoutineNotifications from getUserRoutines for user ${userId} with ${routines.length} routines`);
+
             await scheduleRoutineNotifications(routine.id, routine.userId);
           }
         } catch (error) {
@@ -413,6 +416,8 @@ export class RoutineService {
         
         // Reschedule notifications for the next occurrence after reset
         // Use dynamic import to avoid circular dependencies
+         logger.info(`scheduleRoutineNotifications from checkAndResetDueRoutinesForUser for user ${userId} with ${routines.length} routines`);
+
         const { scheduleRoutineNotifications } = await import('../../infrastructure/queue/notificationScheduler');
         scheduleRoutineNotifications(routine.id, userId)
           .catch(err => logger.error(`Failed to reschedule notifications for routine ${routine.id} after reset:`, err));

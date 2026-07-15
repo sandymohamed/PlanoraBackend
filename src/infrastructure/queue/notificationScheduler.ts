@@ -2001,10 +2001,21 @@ export async function scheduleRoutineReminderNotification(
 /**
  * Schedule notifications for all tasks in a routine
  */
+const schedulingLocks = new Set<string>();
+
 export async function scheduleRoutineNotifications(
   routineId: string,
   _userId: string,
 ): Promise<void> {
+  // Prevent concurrent scheduling of the same routine
+  if (schedulingLocks.has(routineId)) {
+    logger.warn(
+      `Routine ${routineId} is already being scheduled, skipping duplicate call`,
+    );
+    return;
+  }
+
+  schedulingLocks.add(routineId);
   try {
     await ensureDatabaseReady();
 
@@ -2130,6 +2141,9 @@ export async function scheduleRoutineNotifications(
       `Failed to schedule notifications for routine ${routineId}:`,
       error,
     );
+  } finally {
+    // Always release the lock
+    schedulingLocks.delete(routineId);
   }
 }
 

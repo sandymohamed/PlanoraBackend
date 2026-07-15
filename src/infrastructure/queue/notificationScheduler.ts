@@ -1181,9 +1181,7 @@ export async function sendTaskCreatedNotification(
       },
     );
 
-    logger.info(
-      `Sent task created notification for user ${userId}`,
-    );
+    logger.info(`Sent task created notification for user ${userId}`);
   } catch (error) {
     logger.error(
       `Failed to send task created notification for ${userId}:`,
@@ -1665,7 +1663,8 @@ async function createAlarmForRoutineReminder(
 
     logger.info(`Creating alarm for routine task reminder`, {
       routineId,
-      taskId,});
+      taskId,
+    });
     // Create the alarm
     const alarm = await withPrismaRetry(async (prisma) => {
       return await prisma.alarm.create({
@@ -1675,7 +1674,8 @@ async function createAlarmForRoutineReminder(
           time: alarmTime,
           timezone: timezone || "UTC",
           recurrenceRule,
-          linkedTaskId: taskId || null,
+          // ❌ REMOVE THIS LINE - it's causing the foreign key error
+          // linkedTaskId: taskId,
           enabled: true,
           snoozeConfig: {
             duration: 5,
@@ -2107,7 +2107,7 @@ export async function scheduleRoutineNotifications(
 
     // Schedule notifications for each task
     for (const task of routine.routineTasks) {
-      logger.debug("inside scheduleRoutineNotifications loop task is:", task)
+      logger.debug("inside scheduleRoutineNotifications loop task is:", task);
       await scheduleRoutineTaskNotifications(
         routine.id,
         routine.userId,

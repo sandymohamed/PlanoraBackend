@@ -248,7 +248,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
       logger.warn('Failed to cancel scheduled alarm notifications', { alarmId: id, error: notifError });
     }
 
-    logger.info('Alarm deleted successfully', { alarmId: id, userId });
+    logger.info('Im from delete alarm route  DELETE /api/v1/alarms/:id   Alarm deleted successfully', { alarmId: id, userId });
 
     return res.json({
       success: true,

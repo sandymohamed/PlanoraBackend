@@ -121,84 +121,147 @@ export class RoutineService {
   /**
    * Get all routines for a user
    */
-  async getUserRoutines(userId: string) {
-    const { executeWithRetry, withPrismaRetry } =
-      await import("../../shared/utils/database");
-    const prisma = getPrismaClient();
+  // async getUserRoutines(userId: string) {
+  //   const { executeWithRetry, withPrismaRetry } =
+  //     await import("../../shared/utils/database");
+  //   const prisma = getPrismaClient();
 
-    // Wrap the entire operation in retry logic to handle connection errors
-    return executeWithRetry(
-      async () => {
-        // First, check and reset any routines that are due
-        await this.checkAndResetDueRoutinesForUser(userId);
+  //   // Wrap the entire operation in retry logic to handle connection errors
+  //   return executeWithRetry(
+  //     async () => {
+  //       // First, check and reset any routines that are due
+  //       await this.checkAndResetDueRoutinesForUser(userId);
 
-        const routines = await prisma.routine.findMany({
-          where: { userId },
-          include: {
-            routineTasks: {
-              orderBy: { order: "asc" },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-        });
+  //       const routines = await prisma.routine.findMany({
+  //         where: { userId },
+  //         include: {
+  //           routineTasks: {
+  //             orderBy: { order: "asc" },
+  //           },
+  //         },
+  //         orderBy: { createdAt: "desc" },
+  //       });
 
-        logger.info(
-          `getUserRoutines for user ${userId} with ${routines.length} routines`,
-        );
+  //       logger.info(
+  //         `getUserRoutines for user ${userId} with ${routines.length} routines`,
+  //       );
 
-        // ✅ FIX: Only schedule if there are NO existing alarms for this routine
-        // This prevents duplicate scheduling on every fetch
-        const { scheduleRoutineNotifications } =
-          await import("../../infrastructure/queue/notificationScheduler");
-        const { withPrismaRetry: withPrismaRetryImport } =
-          await import("../../shared/utils/database");
+  //       const { scheduleRoutineNotifications } =
+  //         await import("../../infrastructure/queue/notificationScheduler");
+  //       const { withPrismaRetry: withPrismaRetryImport } =
+  //         await import("../../shared/utils/database");
 
-        const routinesNeedingReminders = routines.filter(
-          (routine) => routine.enabled && routine.reminderBefore,
-        );
+  //       const routinesNeedingReminders = routines.filter(
+  //         (routine) => routine.enabled && routine.reminderBefore,
+  //       );
 
-        // ✅ Run scheduling in the background but with proper checks
-        void (async () => {
-          for (const routine of routinesNeedingReminders) {
-            try {
-              // ✅ Check if alarm already exists for this routine
-              const existingAlarm = await withPrismaRetryImport((prisma) =>
-                prisma.alarm.findFirst({
-                  where: {
-                    userId: routine.userId,
-                    title: {
-                      contains: `Routine: ${routine.title}`,
-                    },
-                  },
-                }),
-              );
+  //       // ✅ Run scheduling in the background but with proper checks
+  //       void (async () => {
+  //         for (const routine of routinesNeedingReminders) {
+  //           try {
+  //             // ✅ Check if alarm already exists for this routine
+  //             const existingAlarm = await withPrismaRetryImport((prisma) =>
+  //               prisma.alarm.findFirst({
+  //                 where: {
+  //                   userId: routine.userId,
+  //                   title: {
+  //                     contains: `Routine: ${routine.title}`,
+  //                   },
+  //                 },
+  //               }),
+  //             );
 
-              // ✅ Only schedule if NO alarm exists
-              if (!existingAlarm) {
-                logger.info(
-                  `Scheduling routine ${routine.id} (${routine.title}) - no alarm found`,
-                );
-                await scheduleRoutineNotifications(routine.id, routine.userId);
-              } else {
-                logger.debug(
-                  `Routine ${routine.id} (${routine.title}) already has an alarm, skipping`,
-                );
-              }
-            } catch (error) {
-              logger.error(
-                `Error checking/scheduling routine ${routine.id}:`,
-                error,
-              );
-            }
-          }
-        })();
+  //             // ✅ Only schedule if NO alarm exists
+  //             if (!existingAlarm) {
+  //               logger.info(
+  //                 `Scheduling routine ${routine.id} (${routine.title}) - no alarm found`,
+  //               );
+  //               await scheduleRoutineNotifications(routine.id, routine.userId);
+  //             } else {
+  //               logger.debug(
+  //                 `Routine ${routine.id} (${routine.title}) already has an alarm, skipping`,
+  //               );
+  //             }
+  //           } catch (error) {
+  //             logger.error(
+  //               `Error checking/scheduling routine ${routine.id}:`,
+  //               error,
+  //             );
+  //           }
+  //         }
+  //       })();
 
-        return routines;
+  //       return routines;
+  //     },
+  //     3,
+  //     1000,
+  //   );
+  // }
+
+
+  /**
+ * Get all routines for a user
+ */
+async getUserRoutines(userId: string) {
+  const { executeWithRetry, withPrismaRetry } = await import('../../shared/utils/database');
+  const prisma = getPrismaClient();
+  
+  return executeWithRetry(async () => {
+    await this.checkAndResetDueRoutinesForUser(userId);
+    
+    const routines = await prisma.routine.findMany({
+      where: { userId },
+      include: {
+        routineTasks: {
+          orderBy: { order: 'asc' },
+        },
       },
-      3,
-      1000,
-    );
-  }
+      orderBy: { createdAt: 'desc' },
+    });
+
+    logger.info(`getUserRoutines for user ${userId} with ${routines.length} routines`);
+    
+    // // ✅ ONLY schedule if NO alarms exist - DON'T DELETE ANYTHING
+    // const { scheduleRoutineNotifications } = await import('../../infrastructure/queue/notificationScheduler');
+    // const { withPrismaRetry: withPrismaRetryImport } = await import('../../shared/utils/database');
+    
+    // const routinesNeedingReminders = routines.filter(
+    //   (routine) => routine.enabled && routine.reminderBefore
+    // );
+
+    // Run scheduling in the background
+    // void (async () => {
+    //   for (const routine of routinesNeedingReminders) {
+    //     try {
+    //       // ✅ Check if alarm already exists for this routine
+    //       const existingAlarm = await withPrismaRetryImport((prisma) =>
+    //         prisma.alarm.findFirst({
+    //           where: {
+    //             userId: routine.userId,
+    //             title: {
+    //               contains: `Routine: ${routine.title}`,
+    //             },
+    //           },
+    //         })
+    //       );
+
+    //       // ✅ ONLY schedule if NO alarm exists - DON'T DELETE ANYTHING
+    //       if (!existingAlarm) {
+    //         logger.info(`Scheduling routine ${routine.id} (${routine.title}) - no alarm found`);
+    //         await scheduleRoutineNotifications(routine.id, routine.userId);
+    //       } else {
+    //         // ✅ Just log that it exists, don't delete it!
+    //         logger.debug(`Routine ${routine.id} (${routine.title}) already has an alarm, skipping`);
+    //       }
+    //     } catch (error) {
+    //       logger.error(`Error checking/scheduling routine ${routine.id}:`, error);
+    //     }
+    //   }
+    // })();
+
+    return routines;
+  }, 3, 1000);
+}
   /**
    * Get a single routine by ID
    */

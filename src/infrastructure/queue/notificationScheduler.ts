@@ -1210,19 +1210,23 @@ export async function scheduleRoutineTaskNotifications(
   try {
     const now = new Date();
 
-    // Cancel existing reminders for this routine task
-    await withPrismaRetry(async (prisma) => {
-      return await prisma.reminder.deleteMany({
-        where: {
-          targetType: "CUSTOM",
-          userId,
-          note: {
-            contains: taskTitle,
-          },
-        },
-      });
-    });
+    // let i = 0;
+    // if (i < 1) {
+    //   // Cancel existing reminders for this routine task
+    //   await withPrismaRetry(async (prisma) => {
+    //     return await prisma.reminder.deleteMany({
+    //       where: {
+    //         targetType: "CUSTOM",
+    //         userId,
+    //         title: {
+    //           contains: `Routine Reminder: ${routineTitle}`,
+    //         },
+    //       },
+    //     });
+    //   });
 
+    //   i++;
+    // }
     // Skip if routine doesn't have a time set
     if (!schedule.time) {
       logger.info(
@@ -1533,19 +1537,22 @@ async function createAlarmForRoutineReminder(
   reminderBefore?: string | null,
 ): Promise<void> {
   try {
-    // Cancel existing alarms for this routine task
-    await withPrismaRetry(async (prisma) => {
-      return await prisma.alarm.deleteMany({
-        where: {
-          userId,
-          // linkedTaskId: taskId,
-          title: {
-            contains: `Routine: ${routineTitle}`,
-          },
-        },
-      });
-    }).catch(() => {});
-
+    // let i = 0;
+    // if (i < 1) {
+    //   // Cancel existing alarms for this routine task
+    //   await withPrismaRetry(async (prisma) => {
+    //     return await prisma.alarm.deleteMany({
+    //       where: {
+    //         userId,
+    //         // linkedTaskId: taskId,
+    //         title: {
+    //           contains: `Routine: ${routineTitle}`,
+    //         },
+    //       },
+    //     });
+    //   }).catch(() => {});
+    //   i++;
+    // }
     // Parse alarm time (already in UTC)
     const [alarmHours, alarmMinutes] = alarmTimeStr.split(":").map(Number);
 
@@ -1793,6 +1800,7 @@ export async function cancelRoutineNotifications(
       });
     }
 
+
     // Cancel alarms for this routine
     await executeWithRetry(async () => {
       return await prisma.alarm.deleteMany({
@@ -1913,18 +1921,27 @@ export async function scheduleRoutineReminderNotification(
       );
     }
 
-    // Cancel existing routine reminder notifications
-    await withPrismaRetry(async (prisma) => {
-      return await prisma.reminder.deleteMany({
+    // Just check if one already exists
+    const existingReminder = await withPrismaRetry(async (prisma) => {
+      return await prisma.reminder.findFirst({
         where: {
-          targetType: "CUSTOM",
           userId,
-          title: {
-            contains: `Routine Reminder: ${routineTitle}`,
-          },
+          targetType: "CUSTOM",
+          title: `Routine Reminder: ${routineTitle}`,
         },
       });
     });
+
+    //   If reminder exists and is scheduled for the same time, skip
+    if (existingReminder) {
+      const existingSchedule = existingReminder.schedule as any;
+      if (existingSchedule.nextOccurrence === nextOccurrence.toISOString()) {
+        logger.info(
+          `Reminder already exists for routine ${routineId}, skipping`,
+        );
+        return;
+      }
+    }
 
     // Create reminder schedule
     const reminderSchedule: any = {
@@ -1933,6 +1950,7 @@ export async function scheduleRoutineReminderNotification(
       timezone: timezone || "UTC",
       routineId,
       reminderBefore,
+      nextOccurrence: nextOccurrence.toISOString(),
     };
 
     if (frequency === "WEEKLY" && schedule.days) {

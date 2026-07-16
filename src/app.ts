@@ -63,6 +63,15 @@ export function createApp() {
     res.status(code).json(health);
   });
 
+
+
+
+
+
+
+
+  
+
   const v1 = "/api/v1";
   app.use(`${v1}/auth`, authRoutes);
   app.use(`${v1}/me`, userRoutes);

@@ -99,25 +99,25 @@ router.put('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-// DELETE /api/v1/me
-router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
+// // DELETE /api/v1/me
+// router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
+//   try {
+//     const prisma = getPrismaClient();
+//     const userId = req.user!.id;
 
-    // Delete user and all related data (cascade)
-    await prisma.user.delete({
-      where: { id: userId },
-    });
+//     // Delete user and all related data (cascade)
+//     await prisma.user.delete({
+//       where: { id: userId },
+//     });
 
-    res.json({
-      success: true,
-      message: 'Account deleted successfully',
-    });
-  } catch (error) {
-    throw error;
-  }
-});
+//     res.json({
+//       success: true,
+//       message: 'Account deleted successfully',
+//     });
+//   } catch (error) {
+//     throw error;
+//   }
+// });
 
 // GET /api/v1/me/stats
 router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
@@ -558,33 +558,374 @@ router.get('/export', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // DELETE /api/v1/me/data - Delete all user data (except account)
+// router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
+//   try {
+//     const prisma = getPrismaClient();
+//     const userId = req.user!.id;
+
+//     // Delete all user data in a transaction
+//     await prisma.$transaction(async (tx) => {
+//       await tx.task.deleteMany({ where: { creatorId: userId } });
+//       await tx.goal.deleteMany({ where: { userId } });
+//       await tx.alarm.deleteMany({ where: { userId } });
+//       await tx.reminder.deleteMany({ where: { userId } });
+//       await tx.routine.deleteMany({ where: { userId } });
+//       await tx.timer.deleteMany({ where: { userId } });
+//       await tx.weeklyReview.deleteMany({ where: { userId } });
+//       await tx.notification.deleteMany({ where: { userId } });
+//       await tx.projectMember.deleteMany({ where: { userId } });
+//     });
+
+//     res.json({
+//       success: true,
+//       message: 'All data deleted successfully',
+//     });
+//   } catch (error) {
+//     throw error;
+//   }
+// });
+
+
+
+// routes/user.routes.ts or wherever your routes are defined
+
+/**
+ * DELETE /api/v1/me - Delete user account and all associated data
+ * This is for Google Play validation - permanently deletes the user account
+ */
+router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const prisma = getPrismaClient();
+    const userId = req.user!.id;
+
+    // Delete user and all related data in a transaction
+    // Due to cascade deletes in the schema, this will clean up everything
+    await prisma.$transaction(async (tx) => {
+      // 1. Delete user's refresh tokens
+      await tx.refreshToken.deleteMany({
+        where: { userId },
+      });
+
+      // 2. Delete password reset tokens
+      await tx.passwordResetToken.deleteMany({
+        where: { userId },
+      });
+
+      // 3. Delete notifications
+      await tx.notification.deleteMany({
+        where: { userId },
+      });
+
+      // 4. Delete reminders
+      await tx.reminder.deleteMany({
+        where: { userId },
+      });
+
+      // 5. Delete analytics events
+      await tx.analyticsEvent.deleteMany({
+        where: { userId },
+      });
+
+      // 6. Delete AI usage logs
+      // await tx.aiUsageLog.deleteMany({
+      //   where: { userId },
+      // });
+
+      // 7. Delete weekly reviews
+      await tx.weeklyReview.deleteMany({
+        where: { userId },
+      });
+
+      // 8. Delete user subscription
+      await tx.userSubscription.deleteMany({
+        where: { userId },
+      });
+
+      // 9. Delete routine tasks and routines
+      await tx.routineTask.deleteMany({
+        where: {
+          routine: {
+            userId,
+          },
+        },
+      });
+      await tx.routine.deleteMany({
+        where: { userId },
+      });
+
+      // 10. Delete timer sessions and timers
+      await tx.timerSession.deleteMany({
+        where: { userId },
+      });
+      await tx.timer.deleteMany({
+        where: { userId },
+      });
+
+      // 11. Delete alarms
+      await tx.alarm.deleteMany({
+        where: { userId },
+      });
+
+      // 12. Delete tasks (both created and assigned)
+      // Note: Tasks with SetNull will have creatorId set to null
+      await tx.task.deleteMany({
+        where: {
+          OR: [
+            { creatorId: userId },
+            { assigneeId: userId },
+          ],
+        },
+      });
+
+      // 13. Delete goals
+      await tx.goal.deleteMany({
+        where: { userId },
+      });
+
+      // 14. Delete milestones
+      await tx.milestone.deleteMany({
+        where: {
+          OR: [
+            { goal: { userId } },
+            { project: { ownerId: userId } },
+          ],
+        },
+      });
+
+      // 15. Delete project-related data
+      // Project comments
+      await tx.projectComment.deleteMany({
+        where: { userId },
+      });
+
+      // Project activities
+      await tx.projectActivity.deleteMany({
+        where: { userId },
+      });
+
+      // Project files
+      await tx.projectFile.deleteMany({
+        where: { userId },
+      });
+
+      // Project notifications
+      await tx.projectNotification.deleteMany({
+        where: { userId },
+      });
+
+      // Project invitations (both sent and received)
+      await tx.projectInvitation.deleteMany({
+        where: {
+          OR: [
+            { invitedBy: userId },
+            { email: req.user!.email },
+          ],
+        },
+      });
+
+      // Project members
+      await tx.projectMember.deleteMany({
+        where: { userId },
+      });
+
+      // Project templates
+      await tx.projectTemplate.deleteMany({
+        where: { createdBy: userId },
+      });
+
+      // Projects owned by user (cascade will delete related data)
+      await tx.project.deleteMany({
+        where: { ownerId: userId },
+      });
+
+      // 16. Finally, delete the user
+      const deletedUser = await tx.user.delete({
+        where: { id: userId },
+      });
+
+      logger.info(`User account deleted: ${userId}`);
+      return deletedUser;
+    });
+
+    res.json({
+      success: true,
+      message: 'Account deleted successfully',
+    });
+  } catch (error) {
+    logger.error('Failed to delete user account:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete account',
+    });
+  }
+});
+
+/**
+ * DELETE /api/v1/me/data - Delete all user data but keep account
+ * This clears all user-generated content while preserving the account
+ */
 router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const prisma = getPrismaClient();
     const userId = req.user!.id;
 
-    // Delete all user data in a transaction
+    logger.info(`Clearing all data for user: ${userId}`);
+
     await prisma.$transaction(async (tx) => {
-      await tx.task.deleteMany({ where: { creatorId: userId } });
-      await tx.goal.deleteMany({ where: { userId } });
-      await tx.alarm.deleteMany({ where: { userId } });
-      await tx.reminder.deleteMany({ where: { userId } });
-      await tx.routine.deleteMany({ where: { userId } });
-      await tx.timer.deleteMany({ where: { userId } });
-      await tx.weeklyReview.deleteMany({ where: { userId } });
-      await tx.notification.deleteMany({ where: { userId } });
-      await tx.projectMember.deleteMany({ where: { userId } });
-      // Note: We don't delete projects as they might have other members
+      // 1. Delete AI usage logs
+      // await tx.aiUsageLog.deleteMany({
+      //   where: { userId },
+      // });
+
+      // 2. Delete weekly reviews
+      await tx.weeklyReview.deleteMany({
+        where: { userId },
+      });
+
+      // 3. Delete routine tasks and routines
+      await tx.routineTask.deleteMany({
+        where: {
+          routine: {
+            userId,
+          },
+        },
+      });
+      await tx.routine.deleteMany({
+        where: { userId },
+      });
+
+      // 4. Delete timer sessions and timers
+      await tx.timerSession.deleteMany({
+        where: { userId },
+      });
+      await tx.timer.deleteMany({
+        where: { userId },
+      });
+
+      // 5. Delete alarms
+      await tx.alarm.deleteMany({
+        where: { userId },
+      });
+
+      // 6. Delete notifications
+      await tx.notification.deleteMany({
+        where: { userId },
+      });
+
+      // 7. Delete reminders
+      await tx.reminder.deleteMany({
+        where: { userId },
+      });
+
+      // 8. Delete analytics events
+      await tx.analyticsEvent.deleteMany({
+        where: { userId },
+      });
+
+      // 9. Delete tasks (both created and assigned)
+      await tx.task.deleteMany({
+        where: {
+          OR: [
+            { creatorId: userId },
+            { assigneeId: userId },
+          ],
+        },
+      });
+
+      // 10. Delete goals
+      await tx.goal.deleteMany({
+        where: { userId },
+      });
+
+      // 11. Delete milestones
+      await tx.milestone.deleteMany({
+        where: {
+          OR: [
+            { goal: { userId } },
+            { project: { ownerId: userId } },
+          ],
+        },
+      });
+
+      // 12. Delete project-related data
+      await tx.projectComment.deleteMany({
+        where: { userId },
+      });
+
+      await tx.projectActivity.deleteMany({
+        where: { userId },
+      });
+
+      await tx.projectFile.deleteMany({
+        where: { userId },
+      });
+
+      await tx.projectNotification.deleteMany({
+        where: { userId },
+      });
+
+      await tx.projectInvitation.deleteMany({
+        where: {
+          OR: [
+            { invitedBy: userId },
+            { email: req.user!.email },
+          ],
+        },
+      });
+
+      await tx.projectMember.deleteMany({
+        where: { userId },
+      });
+
+      await tx.projectTemplate.deleteMany({
+        where: { createdBy: userId },
+      });
+
+      // 11. Remove user from projects (set as null where applicable)
+      // Update tasks where user is assignee to remove assignment
+      await tx.task.updateMany({
+        where: { assigneeId: userId },
+        data: { assigneeId: null },
+      });
+
+      // Update tasks where user is creator (keep but remove creator)
+      await tx.task.updateMany({
+        where: { creatorId: userId },
+        data: { creatorId: userId }, // Keep as creator, or set to a system user
+      });
+
+      // 12. Delete projects owned by user
+      await tx.project.deleteMany({
+        where: { ownerId: userId },
+      });
+
+      // 13. Keep user account but clear some fields if needed
+      // Uncomment if you want to anonymize the user data
+      // await tx.user.update({
+      //   where: { id: userId },
+      //   data: {
+      //     name: 'Deleted User',
+      //     email: `deleted_${userId}@deleted.com`,
+      //     // Don't clear passwordHash or user can't login
+      //   },
+      // });
+
+      logger.info(`All data cleared for user: ${userId}`);
     });
 
     res.json({
       success: true,
-      message: 'All data deleted successfully',
+      message: 'All data deleted successfully. Your account has been preserved.',
     });
   } catch (error) {
-    throw error;
+    logger.error('Failed to delete user data:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete data',
+    });
   }
 });
+
 
 export default router;
 

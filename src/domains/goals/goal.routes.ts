@@ -463,6 +463,8 @@ router.post('/:id/milestones', async (req: AuthenticatedRequest, res: Response) 
       });
     });
 
+    console.log("** my milestone:",milestone)
+
     // Schedule notifications for milestone due date if provided
     if (milestone.dueDate) {
       const { scheduleMilestoneDueDateNotifications } = await import('../../infrastructure/queue/notificationScheduler');

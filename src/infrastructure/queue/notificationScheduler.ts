@@ -1,3 +1,4 @@
+import { log } from "console";
 import {
   getPrismaClient,
   executeWithRetry,
@@ -301,17 +302,17 @@ export async function scheduleMilestoneDueDateNotifications(
 
     // Delete existing reminders for this milestone
     // Since targetId is null for GOAL type, match by note content
-    await executeWithRetry(async () => {
-      return await prisma.reminder.deleteMany({
-        where: {
-          targetType: "GOAL",
-          userId,
-          note: {
-            contains: milestoneTitle,
-          },
-        },
-      });
-    });
+    // await executeWithRetry(async () => {
+    //   return await prisma.reminder.deleteMany({
+    //     where: {
+    //       targetType: "GOAL",
+    //       userId,
+    //       note: {
+    //         contains: milestoneTitle,
+    //       },
+    //     },
+    //   });
+    // });
 
     const now = new Date();
     const dueDateTime = new Date(dueDate);
@@ -336,6 +337,12 @@ export async function scheduleMilestoneDueDateNotifications(
     oneHourBefore.setHours(oneHourBefore.getHours() - 1);
 
     const reminders = [];
+
+    console.log(`Scheduling milestone due date notifications for milestone ${milestoneId}`, {
+      dueDateTime: dueDateTime.toISOString(),
+      oneDayBefore: oneDayBefore.toISOString(),
+      oneHourBefore: oneHourBefore.toISOString(),
+    });
 
     // 1 day before
     if (oneDayBefore > now && oneDayBefore < dueDateTime) {
@@ -630,6 +637,12 @@ export async function scheduleGoalTargetDateNotifications(
 
     const oneDayBefore = new Date(targetDateTime);
     oneDayBefore.setDate(oneDayBefore.getDate() - 1);
+
+logger.info(`Scheduling goal target date notifications for goal ${goalId}`, {
+      targetDateTime: targetDateTime.toISOString(),
+      oneWeekBefore: oneWeekBefore.toISOString(),
+      oneDayBefore: oneDayBefore.toISOString(),
+    });
 
     const reminders = [];
 

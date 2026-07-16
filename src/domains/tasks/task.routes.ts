@@ -370,15 +370,15 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     ).catch(err => logger.error('Failed to send task created notification:', err));
 
     // Send assignment notification if task is assigned
-    if (task.assigneeId && task.assigneeId !== userId) {
-      const creator = task.creator;
-      notificationScheduler.sendTaskAssignmentNotification(
-        task.id,
-        task.assigneeId,
-        task.title,
-        creator?.name || creator?.email
-      ).catch(err => logger.error('Failed to send assignment notification:', err));
-    }
+    // if (task.assigneeId && task.assigneeId !== userId) {
+    //   const creator = task.creator;
+    //   notificationScheduler.sendTaskAssignmentNotification(
+    //     task.id,
+    //     task.assigneeId,
+    //     task.title,
+    //     creator?.name || creator?.email
+    //   ).catch(err => logger.error('Failed to send assignment notification:', err));
+    // }
 
     res.status(201).json({
       success: true,

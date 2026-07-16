@@ -159,24 +159,12 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
       console.log("routineWithTask", routineWithTask);
 
       const task = routineWithTask?.routineTasks?.[0];
-      // Schedule notifications for the routine
-      // if (task) {
+ 
         console.log(`**** routineWithTask Scheduling notifications for routine ${routine.id} for user ${userId}`,);
-
-        // scheduleTaskDueDateNotifications(
-        //   task?.id,
-        //   routineWithTask.userId,
-        //   routineWithTask.nextOccurrenceAt,
-        //   task.title,
-        //   dueTime,
-        // ).catch((err) =>
-        //   logger.error("Failed to reschedule task notifications:", err),
-        // );
 
         scheduleRoutineNotifications(routine.id, userId).catch((err) =>
           logger.error("Failed to schedule routine notifications:", err),
         );
-      // }
 
       return res.status(201).json({
         success: true,

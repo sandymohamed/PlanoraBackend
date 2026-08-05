@@ -400,7 +400,6 @@ async getUserRoutines(userId: string) {
   ) {
     const prisma = getPrismaClient();
 
-    logger.info("addTaskToRoutine taskData:", taskData);
     // Verify ownership
     const routine = await prisma.routine.findFirst({
       where: {

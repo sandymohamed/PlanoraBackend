@@ -700,12 +700,13 @@ export async function checkAndNotifyOverdueMilestones(): Promise<void> {
         });
       });
 
-      if (existingReminder) {
-        logger.info(
-          `Overdue notification already sent today for milestone ${milestone.id}`,
-        );
-        continue;
-      }
+      // if (existingReminder) {
+      //   logger.info(
+      //     `Overdue notification already sent today for milestone ${milestone.id} `,
+      //     { existingReminder },
+      //   );
+      //   continue;
+      // }
 
       // Calculate days overdue
       const daysOverdue = Math.floor(

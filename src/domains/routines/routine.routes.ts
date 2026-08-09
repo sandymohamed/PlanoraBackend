@@ -96,7 +96,7 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
     const { error, value } = createRoutineSchema.validate(req.body);
 
     console.log("Creating routine with request value:", value);
-   
+
     if (error) {
       return res.status(400).json({
         success: false,
@@ -156,12 +156,14 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
       console.log("routineWithTask", routineWithTask);
 
       const task = routineWithTask?.routineTasks?.[0];
- 
-        console.log(`**** routineWithTask Scheduling notifications for routine ${routine.id} for user ${userId}`,);
 
-        scheduleRoutineNotifications(routine.id, userId).catch((err) =>
-          logger.error("Failed to schedule routine notifications:", err),
-        );
+      console.log(
+        `**** routineWithTask Scheduling notifications for routine ${routine.id} for user ${userId}`,
+      );
+
+      scheduleRoutineNotifications(routine.id, userId).catch((err) =>
+        logger.error("Failed to schedule routine notifications:", err),
+      );
 
       return res.status(201).json({
         success: true,
@@ -171,12 +173,12 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
       logger.error("Failed to create automatic task for routine:", taskError);
       // If task creation fails, still return the routine but log the error
       // Schedule notifications anyway
-        console.log(
-          `**** catch error Scheduling notifications for routine ${routine.id} for user ${userId}`,
-        );
-        scheduleRoutineNotifications(routine.id, userId).catch((err) =>
-          logger.error("Failed to schedule routine notifications:", err),
-        );
+      console.log(
+        `**** catch error Scheduling notifications for routine ${routine.id} for user ${userId}`,
+      );
+      scheduleRoutineNotifications(routine.id, userId).catch((err) =>
+        logger.error("Failed to schedule routine notifications:", err),
+      );
 
       return res.status(201).json({
         success: true,
@@ -392,6 +394,7 @@ router.post(
           routine.frequency,
           schedule,
           routine.timezone,
+          routine.nextOccurrenceAt,
           task.id,
           task.title,
           task.reminderTime,
@@ -447,7 +450,7 @@ router.put(
       const routine = existingTask.routine;
       if (routine.enabled) {
         // Cancel existing notification
-        await cancelRoutineTaskNotifications(taskId, userId);
+        await cancelRoutineTaskNotifications(taskId, userId, routine.id);
         // Schedule new notification
         const schedule = routine.schedule as any;
         scheduleRoutineTaskNotifications(
@@ -457,6 +460,7 @@ router.put(
           routine.frequency,
           schedule,
           routine.timezone,
+          routine.nextOccurrenceAt,
           task.id,
           task.title,
           task.reminderTime,
@@ -465,8 +469,9 @@ router.put(
         );
       } else {
         // Cancel notification if routine is disabled
-        cancelRoutineTaskNotifications(taskId, userId).catch((err) =>
-          logger.error("Failed to cancel routine task notification:", err),
+        cancelRoutineTaskNotifications(taskId, userId, routine.title).catch(
+          (err) =>
+            logger.error("Failed to cancel routine task notification:", err),
         );
       }
 
@@ -493,10 +498,24 @@ router.delete(
       const { taskId } = req.params;
 
       await routineService.deleteRoutineTask(taskId, userId);
+      // Get task first to get routineId
+      const { getPrismaClient } = await import("../../shared/utils/database");
+      const prisma = getPrismaClient();
+      const existingTask = await prisma.routineTask.findUnique({
+        where: { id: taskId },
+        include: { routine: true },
+      });
+      if (!existingTask) {
+        return res.status(404).json({
+          success: false,
+          message: "Task not found",
+        });
+      }
 
       // Cancel notifications for this task
-      cancelRoutineTaskNotifications(taskId, userId).catch((err) =>
-        logger.error("Failed to cancel routine task notification:", err),
+      cancelRoutineTaskNotifications(taskId, userId, existingTask.id).catch(
+        (err) =>
+          logger.error("Failed to cancel routine task notification:", err),
       );
 
       return res.json({
@@ -522,6 +541,32 @@ router.put(
       const { taskId } = req.params;
       const { completed } = req.body;
 
+      const { getPrismaClient } = await import("../../shared/utils/database");
+      const prisma = getPrismaClient();
+      const existingTask = await prisma.routineTask.findUnique({
+        where: { id: taskId },
+        include: { routine: true },
+      });
+      console.log("existingTask", existingTask);
+
+      if (!existingTask || existingTask.routine.userId !== userId) {
+        return res.status(404).json({
+          success: false,
+          message: "Task not found",
+        });
+      }
+
+      const routineId = existingTask?.routine?.id;
+
+      console.log(
+        `Toggling task ${taskId} completion to ${completed} for user ${userId}`,
+      );
+      if (completed) {
+        console.log(` completion to ${completed} `);
+        await cancelRoutineNotifications(routineId, userId);
+      } else {
+        await scheduleRoutineNotifications(routineId, userId);
+      }
       const task = await routineService.toggleTaskCompletion(
         taskId,
         userId,

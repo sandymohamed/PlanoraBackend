@@ -1,5 +1,7 @@
 import { Queue, Worker, Job } from "bullmq";
 import { getRedisClient } from "../../shared/utils/redis";
+import { calculateNextOccurrence } from "../../shared/utils/routineSchedule";
+
 import { logger } from "../../shared/utils/logger";
 
 // Queue names
@@ -155,115 +157,115 @@ const initializeWorkers = async (): Promise<void> => {
 
 // Job processing functions
 
-// --- Helper: compute next occurrence for simple schedules ---
-function computeNextOccurrence(schedule: any, _timezone: string): Date | null {
-  try {
-    if (!schedule || typeof schedule !== "object") {
-      logger.debug("computeNextOccurrence: schedule is not an object", {
-        schedule,
-      });
-      return null;
-    }
+// // --- Helper: compute next occurrence for simple schedules ---
+// function computeNextOccurrence(schedule: any, _timezone: string): Date | null {
+//   try {
+//     if (!schedule || typeof schedule !== "object") {
+//       logger.debug("computeNextOccurrence: schedule is not an object", {
+//         schedule,
+//       });
+//       return null;
+//     }
 
-    logger.info("computeNextOccurrence: calculating next occurrence", { schedule, timezone: _timezone });
-    // One-off at a specific ISO date: do not reschedule
-    if (schedule.at) {
-      logger.warn(
-        "computeNextOccurrence: one-off schedule, not rescheduling",
-        { schedule },
-      );
-      return null;
-    }
+//     logger.info("computeNextOccurrence: calculating next occurrence", { schedule, timezone: _timezone });
+//     // One-off at a specific ISO date: do not reschedule
+//     if (schedule.at) {
+//       logger.warn(
+//         "computeNextOccurrence: one-off schedule, not rescheduling",
+//         { schedule },
+//       );
+//       return null;
+//     }
 
-    const now = new Date();
+//     const now = new Date();
 
-    logger.info("computeNextOccurrence: current time", { now: now.toISOString() });
-    if (schedule.frequency === "DAILY" && schedule.time) {
-      const [hh, mm] = String(schedule.time)
-        .split(":")
-        .map((v: string) => parseInt(v, 10));
-      const next = new Date(now);
-      next.setHours(hh || 0, mm || 0, 0, 0);
-      if (next <= now) {
-        next.setDate(next.getDate() + 1);
-      }
-      logger.debug("computeNextOccurrence: calculated DAILY next occurrence", {
-        next: next.toISOString(),
-        schedule,
-      });
-      return next;
-    }
+//     logger.info("computeNextOccurrence: current time", { now: now.toISOString() });
+//     if (schedule.frequency === "DAILY" && schedule.time) {
+//       const [hh, mm] = String(schedule.time)
+//         .split(":")
+//         .map((v: string) => parseInt(v, 10));
+//       const next = new Date(now);
+//       next.setHours(hh || 0, mm || 0, 0, 0);
+//       if (next <= now) {
+//         next.setDate(next.getDate() + 1);
+//       }
+//       logger.debug("computeNextOccurrence: calculated DAILY next occurrence", {
+//         next: next.toISOString(),
+//         schedule,
+//       });
+//       return next;
+//     }
 
-    if (schedule.frequency === "WEEKLY" && schedule.time) {
-      const [hh, mm] = String(schedule.time)
-        .split(":")
-        .map((v: string) => parseInt(v, 10));
-      const days: number[] =
-        Array.isArray(schedule.days) && schedule.days.length > 0
-          ? schedule.days
-          : [new Date().getDay()];
-      // Find soonest upcoming day/time
-      let soonest: Date | null = null;
-      for (const day of days) {
-        const d = new Date(now);
-        const delta = (day - d.getDay() + 7) % 7;
-        d.setDate(d.getDate() + delta);
-        d.setHours(hh || 0, mm || 0, 0, 0);
-        if (d <= now) {
-          d.setDate(d.getDate() + 7);
-        }
-        if (!soonest || d < soonest) soonest = d;
-      }
-      logger.debug("computeNextOccurrence: calculated WEEKLY next occurrence", {
-        next: soonest?.toISOString(),
-        schedule,
-      });
-      return soonest;
-    }
+//     if (schedule.frequency === "WEEKLY" && schedule.time) {
+//       const [hh, mm] = String(schedule.time)
+//         .split(":")
+//         .map((v: string) => parseInt(v, 10));
+//       const days: number[] =
+//         Array.isArray(schedule.days) && schedule.days.length > 0
+//           ? schedule.days
+//           : [new Date().getDay()];
+//       // Find soonest upcoming day/time
+//       let soonest: Date | null = null;
+//       for (const day of days) {
+//         const d = new Date(now);
+//         const delta = (day - d.getDay() + 7) % 7;
+//         d.setDate(d.getDate() + delta);
+//         d.setHours(hh || 0, mm || 0, 0, 0);
+//         if (d <= now) {
+//           d.setDate(d.getDate() + 7);
+//         }
+//         if (!soonest || d < soonest) soonest = d;
+//       }
+//       logger.debug("computeNextOccurrence: calculated WEEKLY next occurrence", {
+//         next: soonest?.toISOString(),
+//         schedule,
+//       });
+//       return soonest;
+//     }
 
-    if (schedule.frequency === "MONTHLY" && schedule.time && schedule.day) {
-      const [hh, mm] = String(schedule.time)
-        .split(":")
-        .map((v: string) => parseInt(v, 10));
-      const targetDay = schedule.day;
-      const next = new Date(now);
-      next.setDate(targetDay);
-      next.setHours(hh || 0, mm || 0, 0, 0);
-      if (next <= now) {
-        next.setMonth(next.getMonth() + 1);
-        // Handle edge case where target day doesn't exist in next month (e.g., Feb 30)
-        // Adjust to last day of month if target day is too high
-        const daysInMonth = new Date(
-          next.getFullYear(),
-          next.getMonth() + 1,
-          0,
-        ).getDate();
-        if (targetDay > daysInMonth) {
-          next.setDate(daysInMonth);
-        } else {
-          next.setDate(targetDay);
-        }
-      }
-      logger.debug(
-        "computeNextOccurrence: calculated MONTHLY next occurrence",
-        { next: next.toISOString(), schedule },
-      );
-      return next;
-    }
+//     if (schedule.frequency === "MONTHLY" && schedule.time && schedule.day) {
+//       const [hh, mm] = String(schedule.time)
+//         .split(":")
+//         .map((v: string) => parseInt(v, 10));
+//       const targetDay = schedule.day;
+//       const next = new Date(now);
+//       next.setDate(targetDay);
+//       next.setHours(hh || 0, mm || 0, 0, 0);
+//       if (next <= now) {
+//         next.setMonth(next.getMonth() + 1);
+//         // Handle edge case where target day doesn't exist in next month (e.g., Feb 30)
+//         // Adjust to last day of month if target day is too high
+//         const daysInMonth = new Date(
+//           next.getFullYear(),
+//           next.getMonth() + 1,
+//           0,
+//         ).getDate();
+//         if (targetDay > daysInMonth) {
+//           next.setDate(daysInMonth);
+//         } else {
+//           next.setDate(targetDay);
+//         }
+//       }
+//       logger.debug(
+//         "computeNextOccurrence: calculated MONTHLY next occurrence",
+//         { next: next.toISOString(), schedule },
+//       );
+//       return next;
+//     }
 
-    logger.warn("computeNextOccurrence: unsupported schedule format", {
-      schedule,
-      frequency: schedule.frequency,
-    });
-    return null;
-  } catch (error) {
-    logger.error("computeNextOccurrence: error calculating next occurrence", {
-      error,
-      schedule,
-    });
-    return null;
-  }
-}
+//     logger.warn("computeNextOccurrence: unsupported schedule format", {
+//       schedule,
+//       frequency: schedule.frequency,
+//     });
+//     return null;
+//   } catch (error) {
+//     logger.error("computeNextOccurrence: error calculating next occurrence", {
+//       error,
+//       schedule,
+//     });
+//     return null;
+//   }
+// }
 
 async function processReminderJob(job: Job): Promise<void> {
   const { reminderId, userId, type } = job.data;
@@ -492,6 +494,7 @@ async function processReminderJob(job: Job): Promise<void> {
     // Schedule next occurrence if recurring-like schedule is present
     try {
       const schedule: any = reminder.schedule as any;
+      const frequency = schedule.frequency;
       logger.debug("Attempting to reschedule reminder", {
         reminderId,
         schedule,
@@ -543,7 +546,7 @@ async function processReminderJob(job: Job): Promise<void> {
         }
 
         // Calculate next routine occurrence
-        const routineNext = computeNextOccurrence(schedule, scheduleTimezone);
+        const routineNext = calculateNextOccurrence(frequency,schedule, scheduleTimezone);
         if (routineNext) {
           // Calculate reminder time by subtracting reminderBefore
           const match = schedule.reminderBefore.match(/^(\d+)([mhdw])$/);
@@ -672,7 +675,7 @@ async function processReminderJob(job: Job): Promise<void> {
           schedule,
         });
         // For other reminder types, use routine occurrence directly
-        next = computeNextOccurrence(schedule, scheduleTimezone);
+        next = calculateNextOccurrence(frequency,schedule, scheduleTimezone);
         logger.info(`next 8: ${next}`);
       }
 

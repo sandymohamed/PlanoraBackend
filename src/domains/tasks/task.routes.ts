@@ -440,63 +440,63 @@ router.put("/:id", async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    // Check if this is a routine task - only allow status updates
-    if (id.startsWith("routine_")) {
-      // Extract routine task ID (handle multiple formats):
-      // - routine_taskId_day_X (weekly format from backend)
-      // - routine_taskId_yyyy-MM-dd (daily format from calendar)
-      // - routine_taskId (simple format)
-      let routineTaskId = id.replace("routine_", "");
+    // // Check if this is a routine task - only allow status updates
+    // if (id.startsWith("routine_")) {
+    //   // Extract routine task ID (handle multiple formats):
+    //   // - routine_taskId_day_X (weekly format from backend)
+    //   // - routine_taskId_yyyy-MM-dd (daily format from calendar)
+    //   // - routine_taskId (simple format)
+    //   let routineTaskId = id.replace("routine_", "");
 
-      // Remove _day_X suffix (e.g., "_day_1" -> "")
-      if (routineTaskId.includes("_day_")) {
-        routineTaskId = routineTaskId.split("_day_")[0];
-      }
-      // Remove date suffix (e.g., "_2025-11-18" -> "")
-      else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
-        routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, "");
-      }
+    //   // Remove _day_X suffix (e.g., "_day_1" -> "")
+    //   if (routineTaskId.includes("_day_")) {
+    //     routineTaskId = routineTaskId.split("_day_")[0];
+    //   }
+    //   // Remove date suffix (e.g., "_2025-11-18" -> "")
+    //   else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
+    //     routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+    //   }
 
-      const { routineService } = await import("../routines/routine.service");
+    //   const { routineService } = await import("../routines/routine.service");
 
-      // Only allow status updates for routine tasks
-      if (value.status === "DONE") {
-        await routineService.toggleTaskCompletion(routineTaskId, userId, true);
-      } else if (value.status === "TODO") {
-        await routineService.toggleTaskCompletion(routineTaskId, userId, false);
-      }
+    //   // Only allow status updates for routine tasks
+    //   if (value.status === "DONE") {
+    //     await routineService.toggleTaskCompletion(routineTaskId, userId, true);
+    //   } else if (value.status === "TODO") {
+    //     await routineService.toggleTaskCompletion(routineTaskId, userId, false);
+    //   }
 
-      // Get the updated routine task as a task object
-      const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
+    //   // Get the updated routine task as a task object
+    //   const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
 
-      // Try to find task by exact ID match first
-      let updatedTask = routineTasks.find((t) => t.id === id);
+    //   // Try to find task by exact ID match first
+    //   let updatedTask = routineTasks.find((t) => t.id === id);
 
-      // If not found, try to find by routineTaskId in metadata (handles ID format mismatches)
-      if (!updatedTask) {
-        updatedTask = routineTasks.find(
-          (t) => t.metadata?.routineTaskId === routineTaskId,
-        );
+    //   // If not found, try to find by routineTaskId in metadata (handles ID format mismatches)
+    //   if (!updatedTask) {
+    //     updatedTask = routineTasks.find(
+    //       (t) => t.metadata?.routineTaskId === routineTaskId,
+    //     );
 
-        // If found by metadata, update the ID to match the requested format
-        if (updatedTask) {
-          updatedTask = {
-            ...updatedTask,
-            id: id, // Use the requested ID format
-          };
-        }
-      }
+    //     // If found by metadata, update the ID to match the requested format
+    //     if (updatedTask) {
+    //       updatedTask = {
+    //         ...updatedTask,
+    //         id: id, // Use the requested ID format
+    //       };
+    //     }
+    //   }
 
-      if (!updatedTask) {
-        throw new NotFoundError("Task not found");
-      }
+    //   if (!updatedTask) {
+    //     throw new NotFoundError("Task not found");
+    //   }
 
-      return res.json({
-        success: true,
-        data: updatedTask,
-        message: "Task updated successfully",
-      });
-    }
+    //   return res.json({
+    //     success: true,
+    //     data: updatedTask,
+    //     message: "Task updated successfully",
+    //   });
+    // }
 
     // Check if user can update this task
     const existingTask = await prisma.task.findFirst({
@@ -612,42 +612,42 @@ router.delete("/:id", async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info("**** Deleting task: ", { taskId: id, userId });
 
-    // Check if this is a routine task
-    if (id.startsWith("routine_")) {
-      // Extract routine task ID (handle multiple formats):
-      // - routine_taskId_day_X (weekly format from backend)
-      // - routine_taskId_yyyy-MM-dd (daily format from calendar)
-      // - routine_taskId (simple format)
+    // // Check if this is a routine task
+    // if (id.startsWith("routine_")) {
+    //   // Extract routine task ID (handle multiple formats):
+    //   // - routine_taskId_day_X (weekly format from backend)
+    //   // - routine_taskId_yyyy-MM-dd (daily format from calendar)
+    //   // - routine_taskId (simple format)
 
-      logger.info("**** Deleting routine task: ", { taskId: id, userId });
-      let routineTaskId = id.replace("routine_", "");
+    //   logger.info("**** Deleting routine task: ", { taskId: id, userId });
+    //   let routineTaskId = id.replace("routine_", "");
 
-      // Remove _day_X suffix (e.g., "_day_1" -> "")
-      if (routineTaskId.includes("_day_")) {
-        routineTaskId = routineTaskId.split("_day_")[0];
-      }
-      // Remove date suffix (e.g., "_2025-11-18" -> "")
-      else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
-        routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, "");
-      }
+    //   // Remove _day_X suffix (e.g., "_day_1" -> "")
+    //   if (routineTaskId.includes("_day_")) {
+    //     routineTaskId = routineTaskId.split("_day_")[0];
+    //   }
+    //   // Remove date suffix (e.g., "_2025-11-18" -> "")
+    //   else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
+    //     routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+    //   }
 
-      const { routineService } = await import("../routines/routine.service");
-      const { cancelRoutineTaskNotifications } =
-        await import("../../infrastructure/queue/notificationScheduler");
+    //   const { routineService } = await import("../routines/routine.service");
+    //   const { cancelRoutineTaskNotifications } =
+    //     await import("../../infrastructure/queue/notificationScheduler");
 
-      // Delete the routine task
-      await routineService.deleteRoutineTask(routineTaskId, userId);
+    //   // Delete the routine task
+    //   await routineService.deleteRoutineTask(routineTaskId, userId);
 
-      // Cancel notifications for this task
-      cancelRoutineTaskNotifications(routineTaskId, userId).catch((err) =>
-        logger.error("Failed to cancel routine task notification:", err),
-      );
+    //   // Cancel notifications for this task
+    //   cancelRoutineTaskNotifications(routineTaskId, userId).catch((err) =>
+    //     logger.error("Failed to cancel routine task notification:", err),
+    //   );
 
-      return res.json({
-        success: true,
-        message: "Task deleted successfully",
-      });
-    }
+    //   return res.json({
+    //     success: true,
+    //     message: "Task deleted successfully",
+    //   });
+    // }
 
     // Regular task deletion
     // Check if user can delete this task
@@ -841,31 +841,30 @@ router.patch(
       const { id } = req.params;
       const userId = req.user!.id;
       const prisma = getPrismaClient();
-
       // Check if this is a routine task
-      if (id.startsWith("routine_")) {
-        // Extract routine task ID (handle both formats: routine_taskId and routine_taskId_day_X)
-        const routineTaskId = id.replace("routine_", "").split("_day_")[0];
-        const { routineService } = await import("../routines/routine.service");
+      // if (id.startsWith("routine_")) {
+      //   // Extract routine task ID (handle both formats: routine_taskId and routine_taskId_day_X)
+      //   const routineTaskId = id.replace("routine_", "").split("_day_")[0];
+      //   const { routineService } = await import("../routines/routine.service");
 
-        // Toggle routine task completion
-        await routineService.toggleTaskCompletion(routineTaskId, userId, true);
+      //   // Toggle routine task completion
+      //   await routineService.toggleTaskCompletion(routineTaskId, userId, true);
 
-        // Get the updated routine task as a task object
-        const routineTasks =
-          await routineService.getRoutineTasksAsTasks(userId);
-        const updatedTask = routineTasks.find((t) => t.id === id);
+      //   // Get the updated routine task as a task object
+      //   const routineTasks =
+      //     await routineService.getRoutineTasksAsTasks(userId);
+      //   const updatedTask = routineTasks.find((t) => t.id === id);
 
-        if (!updatedTask) {
-          throw new NotFoundError("Task");
-        }
+      //   if (!updatedTask) {
+      //     throw new NotFoundError("Task");
+      //   }
 
-        return res.json({
-          success: true,
-          data: updatedTask,
-          message: "Task completed successfully",
-        });
-      }
+      //   return res.json({
+      //     success: true,
+      //     data: updatedTask,
+      //     message: "Task completed successfully",
+      //   });
+      // }
 
       // Check if user can complete this task
       const task = await prisma.task.findFirst({
@@ -934,30 +933,30 @@ router.patch(
       const userId = req.user!.id;
       const prisma = getPrismaClient();
 
-      // Check if this is a routine task
-      if (id.startsWith("routine_")) {
-        // Extract routine task ID (handle both formats: routine_taskId and routine_taskId_day_X)
-        const routineTaskId = id.replace("routine_", "").split("_day_")[0];
-        const { routineService } = await import("../routines/routine.service");
+      // // Check if this is a routine task
+      // if (id.startsWith("routine_")) {
+      //   // Extract routine task ID (handle both formats: routine_taskId and routine_taskId_day_X)
+      //   const routineTaskId = id.replace("routine_", "").split("_day_")[0];
+      //   const { routineService } = await import("../routines/routine.service");
 
-        // Toggle routine task completion
-        await routineService.toggleTaskCompletion(routineTaskId, userId, false);
+      //   // Toggle routine task completion
+      //   await routineService.toggleTaskCompletion(routineTaskId, userId, false);
 
-        // Get the updated routine task as a task object
-        const routineTasks =
-          await routineService.getRoutineTasksAsTasks(userId);
-        const updatedTask = routineTasks.find((t) => t.id === id);
+      //   // Get the updated routine task as a task object
+      //   const routineTasks =
+      //     await routineService.getRoutineTasksAsTasks(userId);
+      //   const updatedTask = routineTasks.find((t) => t.id === id);
 
-        if (!updatedTask) {
-          throw new NotFoundError("Task");
-        }
+      //   if (!updatedTask) {
+      //     throw new NotFoundError("Task");
+      //   }
 
-        return res.json({
-          success: true,
-          data: updatedTask,
-          message: "Task uncompleted successfully",
-        });
-      }
+      //   return res.json({
+      //     success: true,
+      //     data: updatedTask,
+      //     message: "Task uncompleted successfully",
+      //   });
+      // }
 
       // Check if user can uncomplete this task
       const task = await prisma.task.findFirst({

@@ -411,15 +411,6 @@ export async function scheduleMilestoneDueDateNotifications(
 
     const reminders = [];
 
-    console.log(
-      `Scheduling milestone due date notifications for milestone ${milestoneId}`,
-      {
-        dueDateTime: dueDateTime.toISOString(),
-        oneDayBefore: oneDayBefore.toISOString(),
-        oneHourBefore: oneHourBefore.toISOString(),
-      },
-    );
-
     // 1 day before
     if (oneDayBefore > now && oneDayBefore < dueDateTime) {
       try {
@@ -2040,7 +2031,6 @@ export async function cancelRoutineTaskNotifications(
       const schedule = reminder.schedule as any;
       return schedule?.routineId === routineId;
     });
-    console.log("allCustomReminders", allCustomReminders.length);
 
     //
     // Remove BullMQ jobs

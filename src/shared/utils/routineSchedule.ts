@@ -49,13 +49,6 @@ export function calculateNextOccurrence(
     );
   }
 
-  console.log("Calculating next occurrence:", {
-    frequency,
-    schedule,
-    timezone: zone,
-    nowLocal: now.toISO(),
-    nowUTC: now.toUTC().toISO(),
-  });
 
   let next: DateTime;
 
@@ -196,13 +189,6 @@ export function calculateNextOccurrence(
   }
 
   const result = next.toUTC().toJSDate();
-
-  console.log("Calculated next occurrence:", {
-    local: next.toISO(),
-    utc: next.toUTC().toISO(),
-    jsDate: result.toISOString(),
-    timezone: zone,
-  });
 
   return result;
 }

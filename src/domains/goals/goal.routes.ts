@@ -41,6 +41,89 @@ const updateGoalSchema = Joi.object({
   metadata: Joi.object().optional(),
 });
 
+const cancelAllGoalNotifications = async (goalId: string, userId: string) => {
+  const { cancelGoalNotifications, cancelMilestoneNotifications } =
+    await import("../../infrastructure/queue/notificationScheduler");
+
+  await cancelGoalNotifications(goalId, userId);
+
+  const prisma = getPrismaClient();
+
+  const milestones = await executeWithRetry(async () => {
+    return prisma.milestone.findMany({
+      where: { goalId },
+      select: { id: true },
+    });
+  });
+
+  for (const milestone of milestones) {
+    await cancelMilestoneNotifications(milestone.id, userId);
+  }
+};
+
+const rescheduleAllGoalNotifications = async (
+  goalId: string,
+  userId: string,
+) => {
+  const {
+    cancelGoalNotifications,
+    scheduleGoalTargetDateNotifications,
+    scheduleMilestoneDueDateNotifications,
+  } = await import("../../infrastructure/queue/notificationScheduler");
+
+  const prisma = getPrismaClient();
+
+  const goal = await executeWithRetry(async () => {
+    return prisma.goal.findFirst({
+      where: {
+        id: goalId,
+        userId,
+      },
+      include: {
+        milestones: {
+          select: {
+            id: true,
+            title: true,
+            dueDate: true,
+          },
+        },
+      },
+    });
+  });
+
+  if (!goal) {
+    throw new NotFoundError("Goal");
+  }
+
+  // Remove existing goal notification before recreating it
+  await cancelGoalNotifications(goalId, userId);
+
+  // Schedule goal target-date notification
+  if (goal.targetDate) {
+    await scheduleGoalTargetDateNotifications(
+      goal.id,
+      userId,
+      goal.targetDate,
+      goal.title,
+    );
+  }
+
+  // Schedule milestone notifications
+  for (const milestone of goal.milestones) {
+    if (!milestone.dueDate) {
+      continue;
+    }
+
+    await scheduleMilestoneDueDateNotifications(
+      milestone.id,
+      goal.id,
+      userId,
+      milestone.dueDate,
+      milestone.title,
+    );
+  }
+};
+
 // GET /api/v1/goals
 router.get("/", async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -303,7 +386,9 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
 router.put("/:id", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+
     const { error, value } = updateGoalSchema.validate(req.body);
+
     if (error) {
       throw new ValidationError(error.details[0].message);
     }
@@ -312,8 +397,11 @@ router.put("/:id", async (req: AuthenticatedRequest, res: Response) => {
     const prisma = getPrismaClient();
 
     const goal = await executeWithRetry(async () => {
-      return await prisma.goal.findFirst({
-        where: { id, userId },
+      return prisma.goal.findFirst({
+        where: {
+          id,
+          userId,
+        },
       });
     });
 
@@ -321,40 +409,88 @@ router.put("/:id", async (req: AuthenticatedRequest, res: Response) => {
       throw new NotFoundError("Goal");
     }
 
+    const previousStatus = goal.status;
+
     const updatedGoal = await executeWithRetry(async () => {
-      return await prisma.goal.update({
+      return prisma.goal.update({
         where: { id },
         data: value,
         include: {
           milestones: {
-            orderBy: { createdAt: "asc" },
+            orderBy: {
+              createdAt: "asc",
+            },
           },
           _count: {
-            select: { milestones: true, tasks: true },
+            select: {
+              milestones: true,
+              tasks: true,
+            },
           },
         },
       });
     });
 
-    // Reschedule notifications if target date changed
-    if (value.targetDate !== undefined && updatedGoal.targetDate) {
-      const { cancelGoalNotifications } =
-        await import("../../infrastructure/queue/notificationScheduler");
-      await cancelGoalNotifications(id, userId);
+    const newStatus = updatedGoal.status;
 
-      const { scheduleGoalTargetDateNotifications } =
-        await import("../../infrastructure/queue/notificationScheduler");
-      scheduleGoalTargetDateNotifications(
-        updatedGoal.id,
+    const statusChanged =
+      value.status !== undefined && previousStatus !== newStatus;
+
+    const targetDateChanged =
+      value.targetDate !== undefined &&
+      goal.targetDate?.getTime() !== updatedGoal.targetDate?.getTime();
+
+    /*
+     * ============================================================
+     * GOAL LIFECYCLE / NOTIFICATIONS
+     * ============================================================
+     */
+
+    // ------------------------------------------------------------
+    // CANCELLED / PAUSED / DONE
+    // ------------------------------------------------------------
+
+    if (statusChanged && ["CANCELLED", "PAUSED", "DONE"].includes(newStatus)) {
+      console.log(`Goal ${id} changed from ${previousStatus} to ${newStatus}`);
+
+      await cancelAllGoalNotifications(id, userId);
+
+      logger.info("Goal notifications cancelled", {
+        goalId: id,
         userId,
-        updatedGoal.targetDate,
-        updatedGoal.title,
-      ).catch((err) =>
-        logger.error("Failed to reschedule goal notifications:", err),
-      );
+        status: newStatus,
+      });
     }
 
-    logger.info("Goal updated successfully", { goalId: id, userId });
+    // ------------------------------------------------------------
+    // ACTIVE
+    // ------------------------------------------------------------
+    else if (
+      newStatus === "ACTIVE" &&
+      (previousStatus !== "ACTIVE" || targetDateChanged)
+    ) {
+      await rescheduleAllGoalNotifications(id, userId);
+
+      logger.info("Goal notifications scheduled", {
+        goalId: id,
+        userId,
+        previousStatus,
+        targetDateChanged,
+      });
+    }
+
+    /*
+     * ============================================================
+     * RESPONSE
+     * ============================================================
+     */
+
+    logger.info("Goal updated successfully", {
+      goalId: id,
+      userId,
+      previousStatus,
+      newStatus,
+    });
 
     res.json({
       success: true,
@@ -533,8 +669,6 @@ router.post(
           },
         });
       });
-
-      console.log("** my milestone:", milestone);
 
       // Schedule notifications for milestone due date if provided
       if (milestone.dueDate) {

@@ -63,15 +63,6 @@ export function createApp() {
     res.status(code).json(health);
   });
 
-
-
-
-
-
-
-
-  
-
   const v1 = "/api/v1";
   app.use(`${v1}/auth`, authRoutes);
   app.use(`${v1}/me`, userRoutes);
@@ -87,10 +78,6 @@ export function createApp() {
   app.use(`${v1}/reviews`, weeklyReviewRoutes);
   app.use(`${v1}/contact`, contactRoutes);
   app.use(`${v1}/waitlist`, waitlistRoutes);
-  // app.get(`${v1}/waitlist`, (req, res)=>{
-  //   console.log('Waitlist signup attempt', { body: req.body });
-  //   res.status(200).json({ success: true, data: { message: 'Waitlist is currently closed' } });
-  // });
   app.use(`${v1}/health`, healthRoutes);
 
   // Collaboration, sync, analytics — archived (not mounted in MVP)

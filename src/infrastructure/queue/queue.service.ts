@@ -270,8 +270,6 @@ const initializeWorkers = async (): Promise<void> => {
 async function processReminderJob(job: Job): Promise<void> {
   const { reminderId, userId, type } = job.data;
 
-  logger.info(`Processing reminder job: ${reminderId}`, { type, userId });
-
   try {
     const { pushNotificationService } =
       await import("./pushNotification.service");
@@ -319,11 +317,6 @@ async function processReminderJob(job: Job): Promise<void> {
     // Default to true (enabled) unless explicitly set to false
     let shouldSendPush = notificationSettings.pushNotifications !== false;
 
-    console.log(
-      "Initial push notification preference check shouldSendPush ",
-      shouldSendPush,
-    );
-    logger.info("Initial push notification preference check", type);
     if (
       type === "TASK_REMINDER" &&
       notificationSettings.taskReminders === false
@@ -439,8 +432,6 @@ async function processReminderJob(job: Job): Promise<void> {
         routineReminders: notificationSettings.routineReminders,
       });
     }
-
-    console.log("shouldSendPush", shouldSendPush);
 
     // Send push notification if enabled
     if (shouldSendPush && pushNotificationService.isAvailable()) {
@@ -707,7 +698,6 @@ async function processReminderJob(job: Job): Promise<void> {
       );
     }
 
-    console.log("shouldSendPush333333:", shouldSendPush);
     logger.info(`Reminder job completed: ${reminderId}`);
   } catch (error) {
     logger.error(`Reminder job failed: ${reminderId}`, error);

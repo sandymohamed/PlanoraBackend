@@ -191,26 +191,19 @@ router.post(
   passwordResetLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const traceId = `forgot-password-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    console.log('Forgot password step: route started', { traceId, email: req.body?.email, ip: req.ip });
 
-    console.log('Forgot password step: validating request body', { traceId });
     const { error, value } = forgotPasswordSchema.validate(req.body);
     if (error) {
       logger.warn('Forgot password step: validation failed', { traceId, error: error.details[0].message });
       throw new ValidationError(error.details[0].message);
     }
-    console.log('Forgot password step: validation passed', { traceId, email: value.email });
 
-    console.log('Forgot password step: calling auth service', { traceId, email: value.email });
     await AuthService.requestPasswordReset(value.email, traceId);
-    console.log('Forgot password step: auth service finished', { traceId, email: value.email });
 
-    console.log('Forgot password step: sending response', { traceId, email: value.email });
     res.json({
       success: true,
       message: 'If an account with that email exists, an OTP has been sent to your email.',
     });
-    console.log('Forgot password step: response sent', { traceId, email: value.email });
   })
 );
 

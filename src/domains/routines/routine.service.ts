@@ -44,18 +44,7 @@ export class RoutineService {
       data.timezone || "UTC",
     );
 
-    const x = {
-      userId,
-      title: data.title,
-      description: data.description,
-      frequency: data.frequency,
-      schedule: data.schedule as Prisma.InputJsonValue,
-      timezone: data.timezone || "UTC",
-      reminderBefore: data.reminderBefore || null,
-      nextOccurrenceAt: nextOccurrence,
-    };
 
-    console.log("Creating routine with data:", x);
     const routine = await prisma.routine.create({
       data: {
         userId,
@@ -346,7 +335,6 @@ export class RoutineService {
     if (!existing) {
       throw new Error("Routine not found");
     }
-    console.log("Updating routine with data:", data);
 
     const updateData: any = {};
     if (data.title) updateData.title = data.title;
@@ -377,7 +365,6 @@ export class RoutineService {
       updateData.schedule = data.schedule as Prisma.InputJsonValue;
     }
 
-    console.log("Updating routine with data:", updateData);
     const routine = await prisma.routine.update({
       where: { id: routineId },
       data: updateData,

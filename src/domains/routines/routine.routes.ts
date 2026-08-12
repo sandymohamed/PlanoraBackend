@@ -80,8 +80,6 @@ router.get("/", async (req: AuthenticatedRequest, res: Response) => {
       data: routines,
     });
   } catch (error) {
-    console.log("Failed to get routines:", error);
-    logger.error("Failed to get routines:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to get routines",
@@ -94,8 +92,6 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const { error, value } = createRoutineSchema.validate(req.body);
-
-    console.log("Creating routine with request value:", value);
 
     if (error) {
       return res.status(400).json({
@@ -153,14 +149,8 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
         }
       }
 
-      console.log("routineWithTask", routineWithTask);
 
       const task = routineWithTask?.routineTasks?.[0];
-
-      console.log(
-        `**** routineWithTask Scheduling notifications for routine ${routine.id} for user ${userId}`,
-      );
-
       scheduleRoutineNotifications(routine.id, userId).catch((err) =>
         logger.error("Failed to schedule routine notifications:", err),
       );
@@ -173,9 +163,6 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
       logger.error("Failed to create automatic task for routine:", taskError);
       // If task creation fails, still return the routine but log the error
       // Schedule notifications anyway
-      console.log(
-        `**** catch error Scheduling notifications for routine ${routine.id} for user ${userId}`,
-      );
       scheduleRoutineNotifications(routine.id, userId).catch((err) =>
         logger.error("Failed to schedule routine notifications:", err),
       );
@@ -547,7 +534,6 @@ router.put(
         where: { id: taskId },
         include: { routine: true },
       });
-      console.log("existingTask", existingTask);
 
       if (!existingTask || existingTask.routine.userId !== userId) {
         return res.status(404).json({
@@ -558,11 +544,7 @@ router.put(
 
       const routineId = existingTask?.routine?.id;
 
-      console.log(
-        `Toggling task ${taskId} completion to ${completed} for user ${userId}`,
-      );
       if (completed) {
-        console.log(` completion to ${completed} `);
         await cancelRoutineNotifications(routineId, userId);
       } else {
         await scheduleRoutineNotifications(routineId, userId);

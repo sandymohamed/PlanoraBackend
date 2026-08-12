@@ -220,10 +220,6 @@ export class AuthService {
       });
     }
 
-    logger.info("User logged in successfully", {
-      userId: user.id,
-      email: user.email,
-    });
 
     return {
       user: {
@@ -260,9 +256,7 @@ export class AuthService {
     }
 
     if (!tokenRecord) {
-      logger.warn("Refresh token not found in database", {
-        tokenHash: tokenHash.substring(0, 12),
-      });
+    
       throw new AuthenticationError("Invalid refresh token");
     }
 
@@ -271,11 +265,7 @@ export class AuthService {
     if (tokenRecord.expiresAt && tokenRecord.expiresAt < new Date()) {
       // Clean up expired token
       await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
-      logger.warn("Refresh token expired in database", {
-        tokenId: tokenRecord.id,
-        expiresAt: tokenRecord.expiresAt,
-        now: new Date(),
-      });
+
       throw new AuthenticationError("Refresh token expired");
     }
 
@@ -411,31 +401,16 @@ export class AuthService {
     traceId?: string,
   ): Promise<void> {
     const prisma = getPrismaClient();
-    console.log("Password reset step: service started", { traceId, email });
 
-    console.log("Password reset step: importing email service", {
-      traceId,
-      email,
-    });
     const { emailService } = await import("./email.service");
-    console.log("Password reset step: email service imported", {
-      traceId,
-      email,
-      smtpConfigured: emailService.isConfigured(),
-    });
+
 
     // Find user by email
-    console.log("Password reset step: finding user", { traceId, email });
     const user = await prisma.user.findUnique({
       where: { email },
       select: { id: true, email: true, name: true },
     });
-    console.log("Password reset step: user lookup finished", {
-      traceId,
-      email,
-      userFound: Boolean(user),
-      userId: user?.id,
-    });
+ 
 
     // Don't reveal if user exists or not (security best practice)
     if (!user) {
@@ -446,11 +421,6 @@ export class AuthService {
       return; // Silent fail for security
     }
 
-    console.log("Password reset step: generating OTP and reset token", {
-      traceId,
-      email,
-      userId: user.id,
-    });
     const { randomInt } = await import("crypto");
     const otp = randomInt(100000, 1000000).toString();
 
@@ -462,26 +432,12 @@ export class AuthService {
     expiresAt.setMinutes(expiresAt.getMinutes() + 10);
 
     // Delete any existing reset tokens for this user
-    console.log("Password reset step: deleting existing reset tokens", {
-      traceId,
-      email,
-      userId: user.id,
-    });
+
     await prisma.passwordResetToken.deleteMany({
       where: { userId: user.id },
     });
-    console.log("Password reset step: existing reset tokens deleted", {
-      traceId,
-      email,
-      userId: user.id,
-    });
 
     // Create new reset token
-    console.log("Password reset step: creating reset token", {
-      traceId,
-      email,
-      userId: user.id,
-    });
     try {
       await prisma.passwordResetToken.create({
         data: {
@@ -501,45 +457,20 @@ export class AuthService {
       });
       throw error;
     }
-    console.log("Password reset step: reset token created", {
-      traceId,
-      email,
-      userId: user.id,
-    });
+ 
 
     // Send OTP email. Keep the API response generic, but log delivery failures
     // so deployment SMTP issues are visible without exposing account existence.
-    console.log("Password reset step: sending OTP email", {
-      traceId,
-      email,
-      userId: user.id,
-    });
+
     const emailSent = await emailService.sendPasswordResetOTP({
       email: user.email,
       otp,
       name: user.name || undefined,
     });
-    console.log("Password reset step: OTP email send finished", {
-      traceId,
-      email,
-      userId: user.id,
-      emailSent,
-    });
-
+ 
     if (emailSent) {
-      console.log("Password reset OTP sent", {
-        traceId,
-        userId: user.id,
-        email,
-      });
       return;
     }
-
-    console.error("Password reset OTP email was not sent", {
-      traceId,
-      userId: user.id,
-      email,
-    });
   }
 
   static async verifyPasswordResetOTP(
@@ -579,8 +510,6 @@ export class AuthService {
       where: { id: resetToken.id },
       data: { verified: true },
     });
-
-    logger.info("Password reset OTP verified", { userId: user.id });
 
     // Return the reset token for password reset
     return resetToken.token;
@@ -623,6 +552,6 @@ export class AuthService {
     // Logout from all devices
     await this.logoutAll(resetToken.userId);
 
-    logger.info("Password reset successfully", { userId: resetToken.userId });
+    logger.info("Password reset successfully");
   }
 }

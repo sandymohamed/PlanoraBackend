@@ -365,7 +365,6 @@ router.post("/", async (req: AuthenticatedRequest, res: Response) => {
       },
     });
 
-    console.log("Task created successfully", task);
     const notificationScheduler =
       await import("../../infrastructure/queue/notificationScheduler");
 

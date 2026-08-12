@@ -87,7 +87,6 @@ export class OpenRouterProvider implements AIProvider {
       temperature: request.temperature ?? AI_CONSTANTS.planTemperature,
       max_tokens: request.maxTokens ?? AI_CONSTANTS.planMaxTokens,
     };
-    console.log('OpenRouterProvider callModel payload', payload);
     if (request.jsonMode) {
       payload.response_format = { type: 'json_object' };
     }
@@ -95,7 +94,6 @@ export class OpenRouterProvider implements AIProvider {
     const envelope = await this.postJson(JSON.stringify(payload));
 
     const content = envelope.choices?.[0]?.message?.content;
-    console.log('OpenRouterProvider callModel content', content);
     if (!content || !content.trim()) {
       throw new AIProviderError('Empty response from provider', true);
     }

@@ -1,10 +1,11 @@
-import { Router, Response } from 'express';
-import Joi from 'joi';
-import bcrypt from 'bcryptjs';
-import { getPrismaClient } from '../../shared/utils/database';
-import { authenticateToken } from '../../shared/middleware/auth';
-import { AuthenticatedRequest, ValidationError } from '../../shared/types';
-import { logger } from '../../shared/utils/logger';
+import { Router, Response } from "express";
+import Joi from "joi";
+import bcrypt from "bcryptjs";
+import { getPrismaClient } from "../../shared/utils/database";
+import { authenticateToken } from "../../shared/middleware/auth";
+import { AuthenticatedRequest, ValidationError } from "../../shared/types";
+import { logger } from "../../shared/utils/logger";
+import { migrateNotificationSettings } from '../../shared/utils/migrateNotificationSettings';
 
 const router = Router();
 
@@ -47,14 +48,14 @@ const privacySettingsSchema = Joi.object({
 
 const pushTokenSchema = Joi.object({
   token: Joi.string().required(),
-  platform: Joi.string().valid('android', 'ios').required(),
+  platform: Joi.string().valid("android", "ios").required(),
 });
 
 // GET /api/v1/me
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get("/", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = req.user!;
-    
+
     res.json({
       success: true,
       data: user,
@@ -65,7 +66,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // PUT /api/v1/me
-router.put('/', async (req: AuthenticatedRequest, res: Response) => {
+router.put("/", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { error, value } = updateProfileSchema.validate(req.body);
     if (error) {
@@ -92,7 +93,7 @@ router.put('/', async (req: AuthenticatedRequest, res: Response) => {
     res.json({
       success: true,
       data: updatedUser,
-      message: 'Profile updated successfully',
+      message: "Profile updated successfully",
     });
   } catch (error) {
     throw error;
@@ -120,7 +121,7 @@ router.put('/', async (req: AuthenticatedRequest, res: Response) => {
 // });
 
 // GET /api/v1/me/stats
-router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
+router.get("/stats", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const prisma = getPrismaClient();
     const userId = req.user!.id;
@@ -138,16 +139,16 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
         where: { creatorId: userId },
       }),
       prisma.task.count({
-        where: { 
+        where: {
           creatorId: userId,
-          status: 'DONE',
+          status: "DONE",
         },
       }),
       prisma.goal.count({
         where: { userId },
       }),
       prisma.goal.count({
-        where: { 
+        where: {
           userId,
           // Assuming we add a status field to goals
         },
@@ -169,7 +170,8 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
         tasks: {
           total: taskCount,
           completed: completedTasks,
-          completionRate: taskCount > 0 ? (completedTasks / taskCount) * 100 : 0,
+          completionRate:
+            taskCount > 0 ? (completedTasks / taskCount) * 100 : 0,
         },
         goals: {
           total: goalCount,
@@ -186,59 +188,65 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // POST /api/v1/me/change-password
-router.post('/change-password', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { error, value } = changePasswordSchema.validate(req.body);
-    if (error) {
-      throw new ValidationError(error.details[0].message);
-    }
+router.post(
+  "/change-password",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { error, value } = changePasswordSchema.validate(req.body);
+      if (error) {
+        throw new ValidationError(error.details[0].message);
+      }
 
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
-    const { currentPassword, newPassword } = value;
+      const prisma = getPrismaClient();
+      const userId = req.user!.id;
+      const { currentPassword, newPassword } = value;
 
-    // Get user with password
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, passwordHash: true },
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found',
+      // Get user with password
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, passwordHash: true },
       });
-    }
 
-    // Verify current password
-    const isPasswordValid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!isPasswordValid) {
-      return res.status(400).json({
-        success: false,
-        error: 'Current password is incorrect',
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
+        });
+      }
+
+      // Verify current password
+      const isPasswordValid = await bcrypt.compare(
+        currentPassword,
+        user.passwordHash,
+      );
+      if (!isPasswordValid) {
+        return res.status(400).json({
+          success: false,
+          error: "Current password is incorrect",
+        });
+      }
+
+      // Hash new password
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+      // Update password
+      await prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash: hashedPassword },
       });
+
+      return res.json({
+        success: true,
+        message: "Password changed successfully",
+      });
+    } catch (error) {
+      throw error;
     }
-
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // Update password
-    await prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash: hashedPassword },
-    });
-
-    return res.json({
-      success: true,
-      message: 'Password changed successfully',
-    });
-  } catch (error) {
-    throw error;
-  }
-});
+  },
+);
 
 // POST /api/v1/me/push-token - Register push notification token (must come before /notification-settings to avoid route conflicts)
-router.post('/push-token', async (req: AuthenticatedRequest, res: Response) => {
+router.post("/push-token", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { error, value } = pushTokenSchema.validate(req.body);
     if (error) {
@@ -261,7 +269,7 @@ router.post('/push-token', async (req: AuthenticatedRequest, res: Response) => {
 
     // Remove existing token if it exists (same token or same platform)
     const filteredTokens = pushTokens.filter(
-      (t: any) => t.token !== token && t.platform !== platform
+      (t: any) => t.token !== token && t.platform !== platform,
     );
 
     // Add new token
@@ -281,12 +289,15 @@ router.post('/push-token', async (req: AuthenticatedRequest, res: Response) => {
       data: { settings: updatedSettings },
     });
 
-    logger.info(`Push token registered for user ${userId}`, { platform, tokenLength: token.length });
+    logger.info(`Push token registered for user ${userId}`, {
+      platform,
+      tokenLength: token.length,
+    });
 
     res.json({
       success: true,
       data: newToken,
-      message: 'Push token registered successfully',
+      message: "Push token registered successfully",
     });
   } catch (error) {
     throw error;
@@ -294,206 +305,244 @@ router.post('/push-token', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // DELETE /api/v1/me/push-token - Remove push notification token
-router.delete('/push-token', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const deletePushTokenSchema = Joi.object({
-      token: Joi.string().required(),
-    });
+router.delete(
+  "/push-token",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const deletePushTokenSchema = Joi.object({
+        token: Joi.string().required(),
+      });
 
-    const { error, value } = deletePushTokenSchema.validate(req.body);
-    if (error) {
-      throw new ValidationError(error.details[0].message);
+      const { error, value } = deletePushTokenSchema.validate(req.body);
+      if (error) {
+        throw new ValidationError(error.details[0].message);
+      }
+
+      const { token } = value;
+
+      const prisma = getPrismaClient();
+      const userId = req.user!.id;
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { settings: true },
+      });
+
+      const currentSettings = (user?.settings as any) || {};
+      const pushTokens = (currentSettings.pushTokens || []).filter(
+        (t: any) => t.token !== token,
+      );
+
+      const updatedSettings = {
+        ...currentSettings,
+        pushTokens,
+      };
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { settings: updatedSettings },
+      });
+
+      res.json({
+        success: true,
+        message: "Push token removed successfully",
+      });
+    } catch (error) {
+      throw error;
     }
-
-    const { token } = value;
-
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { settings: true },
-    });
-
-    const currentSettings = (user?.settings as any) || {};
-    const pushTokens = (currentSettings.pushTokens || []).filter(
-      (t: any) => t.token !== token
-    );
-
-    const updatedSettings = {
-      ...currentSettings,
-      pushTokens,
-    };
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: { settings: updatedSettings },
-    });
-
-    res.json({
-      success: true,
-      message: 'Push token removed successfully',
-    });
-  } catch (error) {
-    throw error;
-  }
-});
+  },
+);
 
 // GET /api/v1/me/notification-settings
-router.get('/notification-settings', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
+router.get(
+  "/notification-settings",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const prisma = getPrismaClient();
+      const userId = req.user!.id;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { settings: true },
-    });
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { settings: true },
+      });
 
-    const settings = (user?.settings as any) || {};
-    const notificationSettings = settings.notifications || {
-      pushNotifications: true,
-      emailNotifications: false,
-      taskReminders: true,
-      goalReminders: true,
-      projectInvitations: true,
-      taskAssignments: true,
-      taskComments: true,
-      dueDateReminders: true,
-      weeklyDigest: false,
-      monthlyReport: false,
-      marketingEmails: false,
-    };
+      const { settings, migrated } = migrateNotificationSettings(
+        user?.settings as any,
+      );
 
-    res.json({
-      success: true,
-      data: notificationSettings,
-    });
-  } catch (error) {
-    throw error;
-  }
-});
+      // const notificationSettings = settings.notifications || {
+      //     pushNotifications: true,
+      //     emailNotifications: false,
+      //     taskReminders: true,
+      //     goalReminders: true,
+      //     projectInvitations: true,
+      //     taskAssignments: true,
+      //     taskComments: true,
+      //     dueDateReminders: true,
+      //     weeklyDigest: false,
+      //     monthlyReport: false,
+      //     marketingEmails: false,
+      //   };
+
+      // Persist the migration only once
+      if (migrated) {
+        await prisma.user.update({
+          where: { id: userId },
+          data: { settings },
+        });
+
+        logger.info("Migrated notification settings", { userId });
+      }
+
+      res.json({
+        success: true,
+        data: (settings as any).notifications,
+      });
+    } catch (error) {
+      throw error;
+    }
+  },
+);
 
 // PUT /api/v1/me/notification-settings
-router.put('/notification-settings', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { error, value } = notificationSettingsSchema.validate(req.body);
-    if (error) {
-      throw new ValidationError(error.details[0].message);
+router.put(
+  "/notification-settings",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { error, value } = notificationSettingsSchema.validate(req.body);
+      if (error) {
+        throw new ValidationError(error.details[0].message);
+      }
+
+      const prisma = getPrismaClient();
+      const userId = req.user!.id;
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { settings: true },
+      });
+
+      const { settings } = migrateNotificationSettings(user?.settings as any);
+
+      const updatedSettings = {
+        ...settings,
+        notifications: {
+          ...(settings as any).notifications,
+          ...value,
+        },
+      };
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { settings: updatedSettings },
+      });
+
+      res.json({
+        success: true,
+        data: updatedSettings.notifications,
+        message: "Notification settings updated successfully",
+      });
+    } catch (error) {
+      logger.error("Error updating notification settings:", error);
+      throw error;
     }
-
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { settings: true },
-    });
-
-    const currentSettings = (user?.settings as any) || {};
-    const updatedSettings = {
-      ...currentSettings,
-      notifications: {
-        ...(currentSettings.notifications || {}),
-        ...value,
-      },
-    };
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: { settings: updatedSettings },
-    });
-
-    res.json({
-      success: true,
-      data: updatedSettings.notifications,
-      message: 'Notification settings updated successfully',
-    });
-  } catch (error) {
-    throw error;
-  }
-});
-
+  },
+);
 
 // GET /api/v1/me/privacy-settings
-router.get('/privacy-settings', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
+router.get(
+  "/privacy-settings",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const prisma = getPrismaClient();
+      const userId = req.user!.id;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { settings: true },
-    });
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { settings: true },
+      });
 
-    const settings = (user?.settings as any) || {};
-    const privacySettings = settings.privacy || {
-      shareAnalytics: true,
-      shareCrashReports: true,
-      showProfileToOthers: true,
-      allowProjectInvites: true,
-      showActivityStatus: true,
-      allowDataCollection: true,
-    };
+      const settings = (user?.settings as any) || {};
+      const privacySettings = settings.privacy || {
+        shareAnalytics: true,
+        shareCrashReports: true,
+        showProfileToOthers: true,
+        allowProjectInvites: true,
+        showActivityStatus: true,
+        allowDataCollection: true,
+      };
 
-    res.json({
-      success: true,
-      data: privacySettings,
-    });
-  } catch (error) {
-    throw error;
-  }
-});
+      res.json({
+        success: true,
+        data: privacySettings,
+      });
+    } catch (error) {
+      throw error;
+    }
+  },
+);
 
 // PUT /api/v1/me/privacy-settings
-router.put('/privacy-settings', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { error, value } = privacySettingsSchema.validate(req.body);
-    if (error) {
-      throw new ValidationError(error.details[0].message);
+router.put(
+  "/privacy-settings",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { error, value } = privacySettingsSchema.validate(req.body);
+      if (error) {
+        throw new ValidationError(error.details[0].message);
+      }
+
+      const prisma = getPrismaClient();
+      const userId = req.user!.id;
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { settings: true },
+      });
+
+      const currentSettings = (user?.settings as any) || {};
+      const updatedSettings = {
+        ...currentSettings,
+        privacy: {
+          ...(currentSettings.privacy || {}),
+          ...value,
+        },
+      };
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { settings: updatedSettings },
+      });
+
+      res.json({
+        success: true,
+        data: updatedSettings.privacy,
+        message: "Privacy settings updated successfully",
+      });
+    } catch (error) {
+      throw error;
     }
-
-    const prisma = getPrismaClient();
-    const userId = req.user!.id;
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { settings: true },
-    });
-
-    const currentSettings = (user?.settings as any) || {};
-    const updatedSettings = {
-      ...currentSettings,
-      privacy: {
-        ...(currentSettings.privacy || {}),
-        ...value,
-      },
-    };
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: { settings: updatedSettings },
-    });
-
-    res.json({
-      success: true,
-      data: updatedSettings.privacy,
-      message: 'Privacy settings updated successfully',
-    });
-  } catch (error) {
-    throw error;
-  }
-});
+  },
+);
 
 // GET /api/v1/me/export - Export user data
-router.get('/export', async (req: AuthenticatedRequest, res: Response) => {
+router.get("/export", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const prisma = getPrismaClient();
     const userId = req.user!.id;
 
     // Fetch all user data
-    const [user, tasks, projects, goals, alarms, reminders, routines, timers, weeklyReviews] =
-      await Promise.all([
+    const [
+      user,
+      tasks,
+      projects,
+      goals,
+      alarms,
+      reminders,
+      routines,
+      timers,
+      weeklyReviews,
+    ] = await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
         select: {
@@ -550,50 +599,18 @@ router.get('/export', async (req: AuthenticatedRequest, res: Response) => {
     res.json({
       success: true,
       data: exportData,
-      message: 'Data exported successfully',
+      message: "Data exported successfully",
     });
   } catch (error) {
     throw error;
   }
 });
 
-// DELETE /api/v1/me/data - Delete all user data (except account)
-// router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
-//   try {
-//     const prisma = getPrismaClient();
-//     const userId = req.user!.id;
-
-//     // Delete all user data in a transaction
-//     await prisma.$transaction(async (tx) => {
-//       await tx.task.deleteMany({ where: { creatorId: userId } });
-//       await tx.goal.deleteMany({ where: { userId } });
-//       await tx.alarm.deleteMany({ where: { userId } });
-//       await tx.reminder.deleteMany({ where: { userId } });
-//       await tx.routine.deleteMany({ where: { userId } });
-//       await tx.timer.deleteMany({ where: { userId } });
-//       await tx.weeklyReview.deleteMany({ where: { userId } });
-//       await tx.notification.deleteMany({ where: { userId } });
-//       await tx.projectMember.deleteMany({ where: { userId } });
-//     });
-
-//     res.json({
-//       success: true,
-//       message: 'All data deleted successfully',
-//     });
-//   } catch (error) {
-//     throw error;
-//   }
-// });
-
-
-
-// routes/user.routes.ts or wherever your routes are defined
-
 /**
  * DELETE /api/v1/me - Delete user account and all associated data
  * This is for Google Play validation - permanently deletes the user account
  */
-router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
+router.delete("/", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const prisma = getPrismaClient();
     const userId = req.user!.id;
@@ -670,10 +687,7 @@ router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
       // Note: Tasks with SetNull will have creatorId set to null
       await tx.task.deleteMany({
         where: {
-          OR: [
-            { creatorId: userId },
-            { assigneeId: userId },
-          ],
+          OR: [{ creatorId: userId }, { assigneeId: userId }],
         },
       });
 
@@ -685,10 +699,7 @@ router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
       // 14. Delete milestones
       await tx.milestone.deleteMany({
         where: {
-          OR: [
-            { goal: { userId } },
-            { project: { ownerId: userId } },
-          ],
+          OR: [{ goal: { userId } }, { project: { ownerId: userId } }],
         },
       });
 
@@ -716,10 +727,7 @@ router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
       // Project invitations (both sent and received)
       await tx.projectInvitation.deleteMany({
         where: {
-          OR: [
-            { invitedBy: userId },
-            { email: req.user!.email },
-          ],
+          OR: [{ invitedBy: userId }, { email: req.user!.email }],
         },
       });
 
@@ -749,13 +757,13 @@ router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
 
     res.json({
       success: true,
-      message: 'Account deleted successfully',
+      message: "Account deleted successfully",
     });
   } catch (error) {
-    logger.error('Failed to delete user account:', error);
+    logger.error("Failed to delete user account:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete account',
+      message: "Failed to delete account",
     });
   }
 });
@@ -764,7 +772,7 @@ router.delete('/', async (req: AuthenticatedRequest, res: Response) => {
  * DELETE /api/v1/me/data - Delete all user data but keep account
  * This clears all user-generated content while preserving the account
  */
-router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
+router.delete("/data", async (req: AuthenticatedRequest, res: Response) => {
   try {
     const prisma = getPrismaClient();
     const userId = req.user!.id;
@@ -825,10 +833,7 @@ router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
       // 9. Delete tasks (both created and assigned)
       await tx.task.deleteMany({
         where: {
-          OR: [
-            { creatorId: userId },
-            { assigneeId: userId },
-          ],
+          OR: [{ creatorId: userId }, { assigneeId: userId }],
         },
       });
 
@@ -840,10 +845,7 @@ router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
       // 11. Delete milestones
       await tx.milestone.deleteMany({
         where: {
-          OR: [
-            { goal: { userId } },
-            { project: { ownerId: userId } },
-          ],
+          OR: [{ goal: { userId } }, { project: { ownerId: userId } }],
         },
       });
 
@@ -866,10 +868,7 @@ router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
 
       await tx.projectInvitation.deleteMany({
         where: {
-          OR: [
-            { invitedBy: userId },
-            { email: req.user!.email },
-          ],
+          OR: [{ invitedBy: userId }, { email: req.user!.email }],
         },
       });
 
@@ -915,17 +914,16 @@ router.delete('/data', async (req: AuthenticatedRequest, res: Response) => {
 
     res.json({
       success: true,
-      message: 'All data deleted successfully. Your account has been preserved.',
+      message:
+        "All data deleted successfully. Your account has been preserved.",
     });
   } catch (error) {
-    logger.error('Failed to delete user data:', error);
+    logger.error("Failed to delete user data:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete data',
+      message: "Failed to delete data",
     });
   }
 });
 
-
 export default router;
-

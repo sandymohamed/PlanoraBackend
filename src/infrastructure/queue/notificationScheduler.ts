@@ -1,4 +1,4 @@
-import { log } from "console";
+import { RoutineSchedule } from "@/domains/routines/routine.service";
 import {
   getPrismaClient,
   executeWithRetry,
@@ -288,6 +288,79 @@ export async function scheduleTaskDueDateNotifications(
 }
 
 /**
+ * Cancel all scheduled notifications for a task
+ */
+export async function cancelTaskNotifications(
+  taskId: string,
+  userId: string,
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+
+    //
+    // 1. Find all reminders
+    //
+    const reminders = await executeWithRetry(async () => {
+      return prisma.reminder.findMany({
+        where: {
+          userId,
+          targetType: "TASK",
+          targetId: taskId,
+        },
+      });
+    });
+
+    //
+    // 2. Remove BullMQ jobs
+    //
+
+    const { getQueue } = await import("./queue.service");
+    const queue = getQueue("NOTIFICATIONS");
+
+    if (queue) {
+      const jobs = await queue.getJobs(["waiting", "delayed", "active"]);
+
+      for (const reminder of reminders) {
+        logger.info(`Removing jobs for reminder ${reminder.id}`);
+        for (const job of jobs) {
+          if (job.data.reminderId === reminder.id) {
+            await job.remove();
+          }
+        }
+      }
+    }
+
+    //
+    // 3. Delete reminders
+    //
+    await executeWithRetry(async () => {
+      return prisma.reminder.deleteMany({
+        where: {
+          userId,
+          targetType: "TASK",
+          targetId: taskId,
+        },
+      });
+    });
+
+    //
+    // 4. Delete native alarm records
+    //
+    await executeWithRetry(async () => {
+      return prisma.alarm.deleteMany({
+        where: {
+          userId,
+          linkedTaskId: taskId,
+        },
+      });
+    });
+
+    logger.info(`Cancelled notifications for task ${taskId}`);
+  } catch (error) {
+    logger.error(`Failed to delete alarms for task ${taskId}:`, error);
+  }
+}
+/**
  * Schedule notifications for milestone due dates
  */
 export async function scheduleMilestoneDueDateNotifications(
@@ -337,12 +410,6 @@ export async function scheduleMilestoneDueDateNotifications(
     oneHourBefore.setHours(oneHourBefore.getHours() - 1);
 
     const reminders = [];
-
-    console.log(`Scheduling milestone due date notifications for milestone ${milestoneId}`, {
-      dueDateTime: dueDateTime.toISOString(),
-      oneDayBefore: oneDayBefore.toISOString(),
-      oneHourBefore: oneHourBefore.toISOString(),
-    });
 
     // 1 day before
     if (oneDayBefore > now && oneDayBefore < dueDateTime) {
@@ -467,6 +534,95 @@ export async function scheduleMilestoneDueDateNotifications(
 }
 
 /**
+ * Cancel all scheduled notifications for a milestone
+ */
+export async function cancelMilestoneNotifications(
+  milestoneId: string,
+  userId: string,
+): Promise<void> {
+  logger.info("Cancelling milestone notifications", {
+    milestoneId,
+    userId,
+  });
+
+  const prisma = getPrismaClient();
+
+  //
+  // 1. Find all reminders for this milestone
+  //
+  try {
+    const reminders = await executeWithRetry(async () => {
+      return prisma.reminder.findMany({
+        where: {
+          userId,
+          targetType: "GOAL",
+          schedule: {
+            path: ["milestoneId"],
+            equals: milestoneId,
+          },
+        },
+      });
+    });
+
+    logger.info(
+      `Found ${reminders.length} reminders to cancel for milestone ${milestoneId}`,
+    );
+
+    //
+    // 2. Remove BullMQ jobs
+    //
+    try {
+      const { getQueue } = await import("./queue.service");
+      const queue = getQueue("REMINDERS");
+
+      if (queue) {
+        logger.info("Reminder queue found, removing jobs for milestone");
+
+        const jobs = await queue.getJobs(["waiting", "delayed", "active"]);
+
+        for (const reminder of reminders) {
+          logger.info(`Removing BullMQ job for reminder ${reminder.id}`);
+
+          for (const job of jobs) {
+            if (job.data.reminderId === reminder.id) {
+              await job.remove();
+            }
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(
+        `Failed removing BullMQ jobs for milestone ${milestoneId}:`,
+        error,
+      );
+    }
+
+    //
+    // 3. Delete reminders
+    //
+    await executeWithRetry(async () => {
+      return prisma.reminder.deleteMany({
+        where: {
+          userId,
+          targetType: "GOAL",
+          schedule: {
+            path: ["milestoneId"],
+            equals: milestoneId,
+          },
+        },
+      });
+    });
+
+    logger.info(`Cancelled milestone notifications for ${milestoneId}`);
+  } catch (error) {
+    logger.error(
+      `Failed to cancel notifications for milestone ${milestoneId}:`,
+      error,
+    );
+  }
+}
+
+/**
  * Check for overdue milestones and send notifications
  * This should be called periodically (e.g., daily cron job)
  */
@@ -535,12 +691,13 @@ export async function checkAndNotifyOverdueMilestones(): Promise<void> {
         });
       });
 
-      if (existingReminder) {
-        logger.info(
-          `Overdue notification already sent today for milestone ${milestone.id}`,
-        );
-        continue;
-      }
+      // if (existingReminder) {
+      //   logger.info(
+      //     `Overdue notification already sent today for milestone ${milestone.id} `,
+      //     { existingReminder },
+      //   );
+      //   continue;
+      // }
 
       // Calculate days overdue
       const daysOverdue = Math.floor(
@@ -590,6 +747,7 @@ export async function checkAndNotifyOverdueMilestones(): Promise<void> {
       }
     }
   } catch (error) {
+    console.error("Failed to check and notify overdue milestones:", error);
     logger.error("Failed to check and notify overdue milestones:", error);
   }
 }
@@ -638,11 +796,14 @@ export async function scheduleGoalTargetDateNotifications(
     const oneDayBefore = new Date(targetDateTime);
     oneDayBefore.setDate(oneDayBefore.getDate() - 1);
 
-logger.info(`Scheduling goal target date notifications for goal ${goalId}`, {
-      targetDateTime: targetDateTime.toISOString(),
-      oneWeekBefore: oneWeekBefore.toISOString(),
-      oneDayBefore: oneDayBefore.toISOString(),
-    });
+    logger.info(
+      `Scheduling goal target date notifications for goal ${goalId}`,
+      {
+        targetDateTime: targetDateTime.toISOString(),
+        oneWeekBefore: oneWeekBefore.toISOString(),
+        oneDayBefore: oneDayBefore.toISOString(),
+      },
+    );
 
     const reminders = [];
 
@@ -760,6 +921,53 @@ logger.info(`Scheduling goal target date notifications for goal ${goalId}`, {
       error,
     );
   }
+}
+/**
+ * Cancel Schedule notifications for goal target dates
+ */
+export async function cancelGoalNotifications(
+  goalId: string,
+  userId: string,
+): Promise<void> {
+  const prisma = getPrismaClient();
+
+  const reminders = await prisma.reminder.findMany({
+    where: {
+      userId,
+      targetType: "GOAL",
+      schedule: {
+        path: ["goalId"],
+        equals: goalId,
+      },
+    },
+  });
+
+  // remove BullMQ jobs
+  const { getQueue } = await import("./queue.service");
+  const queue = getQueue("REMINDERS");
+
+  if (queue) {
+    const jobs = await queue.getJobs(["waiting", "delayed", "active"]);
+
+    for (const reminder of reminders) {
+      for (const job of jobs) {
+        if (job.data.reminderId === reminder.id) {
+          await job.remove();
+        }
+      }
+    }
+  }
+
+  await prisma.reminder.deleteMany({
+    where: {
+      userId,
+      targetType: "GOAL",
+      schedule: {
+        path: ["goalId"],
+        equals: goalId,
+      },
+    },
+  });
 }
 
 /**
@@ -1204,43 +1412,37 @@ export async function sendTaskCreatedNotification(
 }
 
 /**
- * Schedule push notifications for routine tasks
- * Creates recurring reminders based on routine frequency and task reminderTime
- * All times are handled in UTC internally
+ * Schedule push notifications for a routine task.
+ *
+ * IMPORTANT:
+ * - schedule.time is a LOCAL wall-clock time in `timezone`.
+ *   Example: "04:50" + "Africa/Cairo" means 04:50 Cairo time.
+ * - nextOccurrence is the single source of truth for the actual
+ *   absolute instant at which this occurrence happens.
+ * - Never interpret schedule.time as UTC here.
  */
 export async function scheduleRoutineTaskNotifications(
   routineId: string,
   userId: string,
   routineTitle: string,
   frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY",
-  schedule: { time?: string; days?: number[]; day?: number },
+  schedule: {
+    time?: string;
+    days?: number[];
+    day?: number;
+  },
   timezone: string,
+  nextOccurrence: Date | null,
   taskId: string,
   taskTitle: string,
   reminderTime?: string | null,
   reminderBefore?: string | null,
 ): Promise<void> {
   try {
-    const now = new Date();
+    // ---------------------------------------------------------
+    // 1. Validate routine schedule
+    // ---------------------------------------------------------
 
-    // let i = 0;
-    // if (i < 1) {
-    //   // Cancel existing reminders for this routine task
-    //   await withPrismaRetry(async (prisma) => {
-    //     return await prisma.reminder.deleteMany({
-    //       where: {
-    //         targetType: "CUSTOM",
-    //         userId,
-    //         title: {
-    //           contains: `Routine Reminder: ${routineTitle}`,
-    //         },
-    //       },
-    //     });
-    //   });
-
-    //   i++;
-    // }
-    // Skip if routine doesn't have a time set
     if (!schedule.time) {
       logger.info(
         `Routine ${routineId} has no time set, skipping notification scheduling`,
@@ -1248,29 +1450,60 @@ export async function scheduleRoutineTaskNotifications(
       return;
     }
 
-    // Parse routine time (already in UTC from mobile)
+    if (!nextOccurrence) {
+      logger.warn(
+        `No next occurrence calculated for routine task ${taskId}, skipping scheduling`,
+        {
+          taskId,
+          routineId,
+          schedule,
+          timezone,
+        },
+      );
+      return;
+    }
+
+    const now = new Date();
+
+    const delay = nextOccurrence.getTime() - now.getTime();
+
+    if (delay <= 0) {
+      logger.warn(`Cannot schedule routine task notification in the past`, {
+        taskId,
+        routineId,
+        timezone,
+        scheduleTime: schedule.time,
+        nextOccurrence: nextOccurrence.toISOString(),
+        now: now.toISOString(),
+        delay,
+      });
+      return;
+    }
+
+    // ---------------------------------------------------------
+    // 3. Calculate the stored notification wall-clock time.
+    // ---------------------------------------------------------
+
     const [routineHours, routineMinutes] = schedule.time.split(":").map(Number);
 
-    // Calculate adjusted notification time based on reminderTime
-    // reminderTime can be:
-    // - Absolute time: "05:00" (use this time directly, already in UTC)
-    // - Relative offset: "-15min", "-1hour", "-30min" (subtract from routine time)
     let notificationHours = routineHours;
     let notificationMinutes = routineMinutes;
 
     if (reminderTime) {
       if (reminderTime.startsWith("-")) {
-        // Relative offset: subtract from routine time
         const offsetStr = reminderTime.slice(1).toLowerCase();
+
         if (offsetStr.includes("min")) {
           const mins = parseInt(
             offsetStr.replace("min", "").replace("s", ""),
             10,
           );
+
           const totalMinutes = routineHours * 60 + routineMinutes - mins;
-          // Wrap around 24 hours using UTC
+
           const wrappedMinutes =
             ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+
           notificationHours = Math.floor(wrappedMinutes / 60);
           notificationMinutes = wrappedMinutes % 60;
         } else if (offsetStr.includes("hour")) {
@@ -1278,75 +1511,47 @@ export async function scheduleRoutineTaskNotifications(
             offsetStr.replace("hour", "").replace("s", ""),
             10,
           );
+
           notificationHours = (((routineHours - hours) % 24) + 24) % 24;
         }
       } else if (reminderTime.includes(":")) {
-        // Absolute time - use reminderTime directly (already in UTC)
+        // Absolute LOCAL time.
         const [reminderHours, reminderMinutes] = reminderTime
           .split(":")
           .map(Number);
+
         notificationHours = reminderHours;
         notificationMinutes = reminderMinutes;
       }
     }
 
-    // Format notification time as HH:mm (UTC)
-    const notificationTimeStr = `${String(notificationHours).padStart(2, "0")}:${String(notificationMinutes).padStart(2, "0")}`;
+    const notificationTimeStr =
+      `${String(notificationHours).padStart(2, "0")}:` +
+      `${String(notificationMinutes).padStart(2, "0")}`;
 
-    // Calculate next occurrence based on frequency using UTC methods
-    let nextOccurrence: Date | null = null;
+    // ---------------------------------------------------------
+    // 4. Store reminder schedule as LOCAL wall-clock metadata.
+    //
+    // Example:
+    //
+    // {
+    //   frequency: "DAILY",
+    //   time: "04:50",
+    //   timezone: "Africa/Cairo"
+    // }
+    //
+    // This is NOT UTC.
+    // ---------------------------------------------------------
 
-    if (frequency === "DAILY") {
-      nextOccurrence = new Date(now);
-      nextOccurrence.setUTCHours(notificationHours, notificationMinutes, 0, 0);
-      if (nextOccurrence <= now) {
-        nextOccurrence.setUTCDate(nextOccurrence.getUTCDate() + 1);
-      }
-    } else if (
-      frequency === "WEEKLY" &&
-      schedule.days &&
-      schedule.days.length > 0
-    ) {
-      // Find soonest upcoming day using UTC
-      const currentDay = now.getUTCDay();
-      let soonest: Date | null = null;
-      for (const day of schedule.days) {
-        const d = new Date(now);
-        const delta = (day - currentDay + 7) % 7;
-        d.setUTCDate(d.getUTCDate() + delta);
-        d.setUTCHours(notificationHours, notificationMinutes, 0, 0);
-        if (d <= now) {
-          d.setUTCDate(d.getUTCDate() + 7);
-        }
-        if (!soonest || d < soonest) soonest = d;
-      }
-      nextOccurrence = soonest;
-    } else if (frequency === "MONTHLY" && schedule.day) {
-      nextOccurrence = new Date(now);
-      nextOccurrence.setUTCDate(schedule.day);
-      nextOccurrence.setUTCHours(notificationHours, notificationMinutes, 0, 0);
-      if (nextOccurrence <= now) {
-        nextOccurrence.setUTCMonth(nextOccurrence.getUTCMonth() + 1);
-      }
-    } else if (frequency === "YEARLY") {
-      // For yearly, we'd need more complex logic - skip for now
-      logger.warn(
-        `Yearly frequency not fully supported for routine notifications, skipping ${routineId}`,
-      );
-      return;
-    }
-
-    if (!nextOccurrence || nextOccurrence <= now) {
-      logger.warn(
-        `Could not calculate valid next occurrence for routine task ${taskId}, skipping notification`,
-      );
-      return;
-    }
-
-    // Create reminder schedule matching routine frequency
-    const reminderSchedule: any = {
+    const reminderSchedule: {
+      frequency: typeof frequency;
+      time: string;
+      timezone: string;
+      days?: number[];
+      day?: number;
+    } = {
       frequency,
-      time: notificationTimeStr, // UTC time
+      time: notificationTimeStr,
       timezone: timezone || "UTC",
     };
 
@@ -1358,122 +1563,134 @@ export async function scheduleRoutineTaskNotifications(
 
     logger.info(`Creating reminder for routine task ${taskId}`, {
       reminderSchedule,
-      nextOccurrence: nextOccurrence.toISOString(),
-      routineId,
-      taskId,
+      timezone,
       routineTime: schedule.time,
       notificationTime: notificationTimeStr,
+      nextOccurrence: nextOccurrence.toISOString(),
+      delay,
+      delayMinutes: Math.round(delay / 60000),
+      routineId,
+      taskId,
     });
 
-    // Store reminder schedule for later use
+    // ---------------------------------------------------------
+    // 5. Store reminder record.
+    // ---------------------------------------------------------
+
     const fullReminderSchedule = {
       ...reminderSchedule,
-      routineId: routineId,
-      taskId: taskId,
-      reminderBefore: reminderBefore,
-      originalRoutineTime: schedule.time, // Store original for reference
+      routineId,
+      taskId,
+      reminderBefore,
+      originalRoutineTime: schedule.time,
     };
 
-    // Create reminder record
     const reminder = await withPrismaRetry(async (prisma) => {
       return await prisma.reminder.create({
         data: {
           userId,
           targetType: "CUSTOM",
           targetId: null,
-          title: `Routine: ${routineTitle}`,
-          note: `Time to complete "${taskTitle}"`,
+          title: `Habit: ${routineTitle}`,
+          note: `Time to complete task "${taskTitle}"`,
           triggerType: "TIME",
           schedule: fullReminderSchedule as any,
         },
       });
     });
 
-    // Schedule the first reminder
-    try {
-      const delay = nextOccurrence.getTime() - Date.now();
-      if (delay <= 0) {
-        logger.warn(
-          `Cannot schedule routine task notification in the past for task ${taskId}`,
-          {
-            taskId,
-            routineId,
-            nextOccurrence: nextOccurrence.toISOString(),
-            now: new Date().toISOString(),
-            delay,
-          },
-        );
-        return;
-      }
+    // ---------------------------------------------------------
+    // 6. Schedule the push notification.
+    // ---------------------------------------------------------
 
+    try {
       const job = await scheduleReminder(
         reminder.id,
         userId,
         nextOccurrence,
         "ROUTINE_REMINDER",
       );
+
       logger.info(`Scheduled routine task notification for task ${taskId}`, {
         reminderId: reminder.id,
         taskId,
         routineId,
         taskTitle,
-        nextOccurrence: nextOccurrence.toISOString(),
-        schedule: reminderSchedule,
         frequency,
+        timezone,
+        schedule: reminderSchedule,
+        nextOccurrence: nextOccurrence.toISOString(),
         jobId: job.id,
         delay,
         delayMinutes: Math.round(delay / 60000),
       });
 
-      // Always create an alarm for the routine task
+      // -------------------------------------------------------
+      // 7. Create the native alarm.
+      //
+      // IMPORTANT:
+      // alarmTimeForReminder is LOCAL wall-clock metadata.
+      // The actual occurrence Date remains nextOccurrence.
+      //
+      // createAlarmForRoutineReminder() must NOT interpret
+      // alarmTimeForReminder as UTC.
+      // -------------------------------------------------------
+
       try {
         let alarmTimeForReminder: string;
 
-        // If reminderBefore is set, calculate alarm time as routine time - reminderBefore
         if (reminderBefore) {
           const match = reminderBefore.match(/^(\d+)([mhdw])$/);
+
           if (match) {
             const [, valueStr, unit] = match;
             const value = parseInt(valueStr, 10);
-            const [routineHours, routineMinutes] = (schedule.time || "00:00")
-              .split(":")
-              .map(Number);
 
-            let alarmHours = routineHours;
-            let alarmMinutes = routineMinutes;
+            let totalMinutes = routineHours * 60 + routineMinutes;
 
-            if (unit === "m") {
-              const totalMinutes = routineHours * 60 + routineMinutes - value;
-              const wrappedMinutes =
-                ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
-              alarmHours = Math.floor(wrappedMinutes / 60);
-              alarmMinutes = wrappedMinutes % 60;
-            } else if (unit === "h") {
-              alarmHours = (((routineHours - value) % 24) + 24) % 24;
-            } else if (unit === "d") {
-              // Days before - keep same time, date will be adjusted
-              alarmHours = routineHours;
-              alarmMinutes = routineMinutes;
-            } else if (unit === "w") {
-              // Weeks before - keep same time, date will be adjusted
-              alarmHours = routineHours;
-              alarmMinutes = routineMinutes;
+            switch (unit) {
+              case "m":
+                totalMinutes -= value;
+                break;
+
+              case "h":
+                totalMinutes -= value * 60;
+                break;
+
+              case "d":
+                // Same local time; date is handled by the occurrence.
+                break;
+
+              case "w":
+                // Same local time; date is handled by the occurrence.
+                break;
             }
 
-            alarmTimeForReminder = `${String(alarmHours).padStart(2, "0")}:${String(alarmMinutes).padStart(2, "0")}`;
+            const wrappedMinutes =
+              ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
 
-            logger.info(`Calculated alarm time from reminderBefore`, {
-              routineTime: schedule.time,
-              reminderBefore,
-              value,
-              unit,
-              alarmTime: alarmTimeForReminder,
-            });
+            const alarmHours = Math.floor(wrappedMinutes / 60);
+            const alarmMinutes = wrappedMinutes % 60;
+
+            alarmTimeForReminder =
+              `${String(alarmHours).padStart(2, "0")}:` +
+              `${String(alarmMinutes).padStart(2, "0")}`;
+
+            logger.info(
+              `Calculated local alarm wall-clock time from reminderBefore`,
+              {
+                routineTime: schedule.time,
+                reminderBefore,
+                value,
+                unit,
+                timezone,
+                alarmTime: alarmTimeForReminder,
+              },
+            );
           } else {
             alarmTimeForReminder = reminderTime || schedule.time || "00:00";
           }
         } else {
-          // No reminderBefore, use reminderTime if provided, otherwise use routine schedule time
           alarmTimeForReminder = reminderTime || schedule.time || "00:00";
         }
 
@@ -1487,10 +1704,21 @@ export async function scheduleRoutineTaskNotifications(
           frequency,
           schedule,
           timezone,
+          // This is LOCAL wall-clock metadata, NOT UTC.
           alarmTimeForReminder,
+
           fullReminderSchedule,
           reminderBefore,
         );
+
+        logger.info(`Created routine task alarm`, {
+          routineId,
+          taskId,
+          timezone,
+          scheduleTime: schedule.time,
+          alarmTimeLocal: alarmTimeForReminder,
+          nextOccurrence: nextOccurrence.toISOString(),
+        });
       } catch (alarmError: any) {
         logger.error(
           `Failed to create alarm for routine task reminder ${taskId}:`,
@@ -1500,9 +1728,13 @@ export async function scheduleRoutineTaskNotifications(
             routineId,
             reminderTime: reminderTime || "routine time",
             reminderBefore,
+            timezone,
+            scheduleTime: schedule.time,
+            nextOccurrence: nextOccurrence.toISOString(),
           },
         );
-        // Don't throw - alarm creation failure shouldn't break reminder scheduling
+
+        // Alarm failure must not break push notification scheduling.
       }
     } catch (scheduleError: any) {
       logger.error(
@@ -1514,9 +1746,9 @@ export async function scheduleRoutineTaskNotifications(
           routineId,
           nextOccurrence: nextOccurrence.toISOString(),
           schedule: reminderSchedule,
+          timezone,
         },
       );
-      // Don't throw - log the error but continue
     }
   } catch (error) {
     logger.error(
@@ -1526,14 +1758,23 @@ export async function scheduleRoutineTaskNotifications(
         taskId,
         routineId,
         userId,
+        timezone,
       },
     );
   }
 }
 
 /**
- * Create an alarm for a routine reminder time
- * All times are handled in UTC internally
+ * Create an alarm for a routine reminder time.
+ *
+ * IMPORTANT:
+ * - schedule.time is LOCAL wall-clock time in `timezone`.
+ *   Example: "04:50" + "Africa/Cairo" means 04:50 Cairo time.
+ * - nextOccurrence is an absolute Date/UTC instant calculated by
+ *   calculateNextOccurrence().
+ * - The alarm is stored as a real UTC Date in the database.
+ * - Never use setUTCHours() with schedule.time because schedule.time
+ *   is NOT UTC.
  */
 async function createAlarmForRoutineReminder(
   routineId: string,
@@ -1550,123 +1791,133 @@ async function createAlarmForRoutineReminder(
   reminderBefore?: string | null,
 ): Promise<void> {
   try {
-    // let i = 0;
-    // if (i < 1) {
-    //   // Cancel existing alarms for this routine task
-    //   await withPrismaRetry(async (prisma) => {
-    //     return await prisma.alarm.deleteMany({
-    //       where: {
-    //         userId,
-    //         // linkedTaskId: taskId,
-    //         title: {
-    //           contains: `Routine: ${routineTitle}`,
-    //         },
-    //       },
-    //     });
-    //   }).catch(() => {});
-    //   i++;
-    // }
-    // Parse alarm time (already in UTC)
-    const [alarmHours, alarmMinutes] = alarmTimeStr.split(":").map(Number);
+    const userTimezone = timezone || "UTC";
 
-    // Calculate alarm time based on nextOccurrence and reminderBefore
-    const alarmTime = new Date(nextOccurrence);
-    alarmTime.setUTCHours(alarmHours, alarmMinutes, 0, 0);
-
-    // If alarm time is after routine time on the same day, it might be for the previous day
-    // This happens when reminder is set for 23:00 and routine is at 02:00 (next day)
-    const [routineHours, routineMinutes] = (schedule.time || "00:00")
-      .split(":")
-      .map(Number);
-    const routineTimeOfDay = routineHours * 60 + routineMinutes;
-    const alarmTimeOfDay = alarmHours * 60 + alarmMinutes;
-
-    // Check if alarm time should be on previous day (alarm is after routine time)
-    // Example: routine at 02:00, alarm at 23:00 should be on previous day
-    if (alarmTimeOfDay > routineTimeOfDay && reminderBefore) {
-      // Check if this is a "before" reminder (should be before routine time)
-      const match = reminderBefore.match(/^(\d+)([mhdw])$/);
-      if (match) {
-        const [, valueStr, unit] = match;
-        const value = parseInt(valueStr, 10);
-        // For day/week offsets, the alarm should be on the previous day
-        if (unit === "d" || unit === "w") {
-          alarmTime.setUTCDate(alarmTime.getUTCDate() - 1);
-          logger.info(
-            `Adjusted alarm time to previous day for day/week reminder`,
-            {
-              alarmTimeStr,
-              routineTime: schedule.time,
-              reminderBefore,
-              adjustedTime: alarmTime.toISOString(),
-            },
-          );
-        }
-      }
-    }
-
-    // If reminderBefore is 'd' or 'w', we need to subtract days from nextOccurrence
-    if (reminderBefore) {
-      const match = reminderBefore.match(/^(\d+)([mhdw])$/);
-      if (match) {
-        const [, valueStr, unit] = match;
-        const value = parseInt(valueStr, 10);
-
-        if (unit === "d") {
-          // Days before - subtract days from the alarm date
-          alarmTime.setUTCDate(alarmTime.getUTCDate() - value);
-          logger.info(`Subtracted ${value} days for reminderBefore`, {
-            reminderBefore,
-            newDate: alarmTime.toISOString(),
-          });
-        } else if (unit === "w") {
-          // Weeks before - subtract weeks from the alarm date
-          alarmTime.setUTCDate(alarmTime.getUTCDate() - value * 7);
-          logger.info(`Subtracted ${value} weeks for reminderBefore`, {
-            reminderBefore,
-            newDate: alarmTime.toISOString(),
-          });
-        }
-      }
-    }
-
-    // Ensure alarm time is in the future
-    const now = new Date();
-    if (alarmTime <= now) {
-      logger.warn(
-        `Alarm time is in the past: ${alarmTime.toISOString()}, calculating next occurrence`,
-      );
-
-      // Move to next occurrence cycle
-      if (frequency === "DAILY") {
-        alarmTime.setUTCDate(alarmTime.getUTCDate() + 1);
-      } else if (
-        frequency === "WEEKLY" &&
-        schedule.days &&
-        schedule.days.length > 0
-      ) {
-        alarmTime.setUTCDate(alarmTime.getUTCDate() + 7);
-      } else if (frequency === "MONTHLY" && schedule.day) {
-        alarmTime.setUTCMonth(alarmTime.getUTCMonth() + 1);
-      } else {
-        alarmTime.setUTCDate(alarmTime.getUTCDate() + 1);
-      }
-
-      logger.info(
-        `Adjusted alarm time to next occurrence: ${alarmTime.toISOString()}`,
-      );
-    }
-
-    // Final check
-    if (alarmTime <= now) {
-      logger.error(
-        `❌ Alarm time is still in the past after all calculations, skipping`,
-      );
+    if (!nextOccurrence) {
+      logger.warn(`No nextOccurrence provided for routine alarm ${routineId}`);
       return;
     }
 
+    let alarmTime = new Date(nextOccurrence);
+
+    // ------------------------------------------------------------
+    // Calculate alarm instant from reminderBefore
+    // ------------------------------------------------------------
+
+    if (reminderBefore) {
+      const match = reminderBefore.match(/^(\d+)([mhdw])$/);
+
+      if (match) {
+        const [, valueStr, unit] = match;
+        const value = parseInt(valueStr, 10);
+
+        switch (unit) {
+          case "m":
+            alarmTime = new Date(alarmTime.getTime() - value * 60 * 1000);
+            break;
+
+          case "h":
+            alarmTime = new Date(alarmTime.getTime() - value * 60 * 60 * 1000);
+            break;
+
+          case "d":
+            alarmTime = new Date(
+              alarmTime.getTime() - value * 24 * 60 * 60 * 1000,
+            );
+            break;
+
+          case "w":
+            alarmTime = new Date(
+              alarmTime.getTime() - value * 7 * 24 * 60 * 60 * 1000,
+            );
+            break;
+        }
+
+        logger.info(`Calculated alarm time from reminderBefore`, {
+          routineId,
+          taskId,
+          routineTime: schedule.time,
+          timezone: userTimezone,
+          reminderBefore,
+          nextOccurrence: nextOccurrence.toISOString(),
+          alarmTime: alarmTime.toISOString(),
+          alarmTimeLocal: alarmTime.toLocaleString("en-US", {
+            timeZone: userTimezone,
+          }),
+        });
+      } else {
+        logger.warn(
+          `Invalid reminderBefore format: ${reminderBefore}. ` +
+            `Using nextOccurrence as alarm time.`,
+          {
+            routineId,
+            taskId,
+          },
+        );
+      }
+    }
+
+    // ------------------------------------------------------------
+    // Fallback for absolute reminderTime
+    // ------------------------------------------------------------
+
+    if (!reminderBefore && alarmTimeStr) {
+      logger.warn(
+        `No reminderBefore provided for routine alarm. ` +
+          `alarmTimeStr (${alarmTimeStr}) is a local wall-clock time. ` +
+          `The current nextOccurrence will be used as the alarm instant.`,
+        {
+          routineId,
+          taskId,
+          alarmTimeStr,
+          timezone: userTimezone,
+          nextOccurrence: nextOccurrence.toISOString(),
+        },
+      );
+
+      alarmTime = new Date(nextOccurrence);
+    }
+
+    // ------------------------------------------------------------
+    // Ensure alarm is in the future
+    // ------------------------------------------------------------
+
+    const now = new Date();
+
+    if (alarmTime <= now) {
+      logger.warn(`Calculated routine alarm is in the past`, {
+        routineId,
+        taskId,
+        alarmTime: alarmTime.toISOString(),
+        now: now.toISOString(),
+        nextOccurrence: nextOccurrence.toISOString(),
+        reminderBefore,
+        timezone: userTimezone,
+      });
+
+      logger.error(
+        `Routine alarm is in the past. Skipping instead of manually ` +
+          `shifting the Date and potentially breaking timezone/DST behavior.`,
+        {
+          routineId,
+          taskId,
+          frequency,
+          schedule,
+          timezone: userTimezone,
+          alarmTime: alarmTime.toISOString(),
+          nextOccurrence: nextOccurrence.toISOString(),
+        },
+      );
+
+      return;
+    }
+
+    // ------------------------------------------------------------
     // Generate recurrence rule
+    // ------------------------------------------------------------
+
     let recurrenceRule: string | null = null;
+
     if (frequency === "DAILY") {
       recurrenceRule = "FREQ=DAILY";
     } else if (
@@ -1675,32 +1926,50 @@ async function createAlarmForRoutineReminder(
       schedule.days.length > 0
     ) {
       const dayNames = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+
       const byDay = schedule.days.map((day) => dayNames[day]).join(",");
+
       recurrenceRule = `FREQ=WEEKLY;BYDAY=${byDay}`;
     } else if (frequency === "MONTHLY" && schedule.day) {
       recurrenceRule = `FREQ=MONTHLY;BYMONTHDAY=${schedule.day}`;
+    } else if (frequency === "YEARLY") {
+      recurrenceRule = "FREQ=YEARLY";
     }
+
+    // ------------------------------------------------------------
+    // Create alarm
+    // ------------------------------------------------------------
 
     logger.info(`Creating alarm for routine task reminder`, {
       routineId,
       taskId,
+      routineTitle,
+      taskTitle,
+      scheduleTime: schedule.time,
+      timezone: userTimezone,
+      nextOccurrence: nextOccurrence.toISOString(),
+      alarmTime: alarmTime.toISOString(),
+      alarmTimeLocal: alarmTime.toLocaleString("en-US", {
+        timeZone: userTimezone,
+      }),
+      reminderBefore,
+      recurrenceRule,
     });
-    // Create the alarm
+
     const alarm = await withPrismaRetry(async (prisma) => {
       return await prisma.alarm.create({
         data: {
           userId,
-          title: `Routine: ${routineTitle} - ${taskTitle}`,
+          title: `Habit: ${routineTitle} - ${taskTitle}`,
           time: alarmTime,
-          timezone: timezone || "UTC",
+          timezone: userTimezone,
           recurrenceRule,
-          // ❌ REMOVE THIS LINE - it's causing the foreign key error
-          // linkedTaskId: taskId,
           enabled: true,
           snoozeConfig: {
             duration: 5,
             maxSnoozes: 3,
           },
+
           smartWakeWindow: 5,
         },
       });
@@ -1710,16 +1979,28 @@ async function createAlarmForRoutineReminder(
       alarmId: alarm.id,
       routineId,
       taskId,
+
+      // Absolute UTC instant
       alarmTime: alarmTime.toISOString(),
+
+      // Human-readable local representation
       alarmTimeLocal: alarmTime.toLocaleString("en-US", {
-        timeZone: timezone || "UTC",
+        timeZone: userTimezone,
       }),
-      recurrenceRule,
-      alarmTimeStr,
+
+      timezone: userTimezone,
+
+      routineTime: schedule.time,
+
+      nextOccurrence: nextOccurrence.toISOString(),
+
       reminderBefore,
+
+      recurrenceRule,
     });
   } catch (error) {
     logger.error(`Failed to create alarm for routine reminder:`, error);
+
     throw error;
   }
 }
@@ -1730,7 +2011,9 @@ async function createAlarmForRoutineReminder(
 export async function cancelRoutineTaskNotifications(
   taskId: string,
   userId: string,
+  routineId: string | undefined,
 ): Promise<void> {
+  if (!routineId) return;
   try {
     const prisma = getPrismaClient();
     // Since targetId is null for CUSTOM type, we need to match by schedule.taskId
@@ -1746,8 +2029,27 @@ export async function cancelRoutineTaskNotifications(
     // Filter reminders where schedule.taskId matches
     const matchingReminders = allCustomReminders.filter((reminder) => {
       const schedule = reminder.schedule as any;
-      return schedule?.taskId === taskId;
+      return schedule?.routineId === routineId;
     });
+
+    //
+    // Remove BullMQ jobs
+    //
+
+    const { getQueue } = await import("./queue.service");
+    const queue = getQueue("NOTIFICATIONS");
+
+    if (queue) {
+      const jobs = await queue.getJobs(["waiting", "delayed", "active"]);
+
+      for (const reminder of matchingReminders) {
+        for (const job of jobs) {
+          if (job.data.reminderId === reminder.id) {
+            await job.remove();
+          }
+        }
+      }
+    }
 
     // Delete matching reminders
     for (const reminder of matchingReminders) {
@@ -1805,6 +2107,25 @@ export async function cancelRoutineNotifications(
       return schedule?.routineId === routineId;
     });
 
+    //
+    // Remove BullMQ jobs
+    //
+
+    const { getQueue } = await import("./queue.service");
+    const queue = getQueue("NOTIFICATIONS");
+
+    if (queue) {
+      const jobs = await queue.getJobs(["waiting", "delayed", "active"]);
+
+      for (const reminder of matchingRoutineReminders) {
+        for (const job of jobs) {
+          if (job.data.reminderId === reminder.id) {
+            await job.remove();
+          }
+        }
+      }
+    }
+
     for (const reminder of matchingRoutineReminders) {
       await executeWithRetry(async () => {
         return await prisma.reminder.delete({
@@ -1812,7 +2133,7 @@ export async function cancelRoutineNotifications(
         });
       });
     }
-
+    const alarmTitlePrefix = `Habit: ${routine.title} - `;
 
     // Cancel alarms for this routine
     await executeWithRetry(async () => {
@@ -1820,16 +2141,16 @@ export async function cancelRoutineNotifications(
         where: {
           userId,
           title: {
-            contains: `Routine: ${routine.title}`,
+            startsWith: alarmTitlePrefix,
           },
         },
       });
     });
 
     // Cancel notifications for each task
-    for (const task of routine.routineTasks) {
-      await cancelRoutineTaskNotifications(task.id, userId);
-    }
+    // for (const task of routine.routineTasks) {
+    //   await cancelRoutineTaskNotifications(task.id, userId, routine.id);
+    // }
 
     logger.info(`Cancelled all notifications for routine ${routineId}`, {
       reminderCount: matchingRoutineReminders.length,
@@ -1845,6 +2166,7 @@ export async function cancelRoutineNotifications(
 /**
  * Schedule routine reminder notification based on reminderBefore field
  * This creates a reminder before the routine occurs (e.g., 2 hours before, 1 day before)
+ * ✅ ✅ ✅ ✅ ✅ ✅
  */
 export async function scheduleRoutineReminderNotification(
   routineId: string,
@@ -1899,10 +2221,6 @@ export async function scheduleRoutineReminderNotification(
 
     // Only schedule if reminder time is in the future
     if (reminderTime <= now) {
-      logger.info(
-        `Routine reminder time is in the past: ${reminderTime.toISOString()}, calculating next reminder time`,
-      );
-
       // Recalculate reminder time based on the next routine occurrence
       if (frequency === "DAILY") {
         reminderTime.setUTCDate(reminderTime.getUTCDate() + 1);
@@ -1940,7 +2258,7 @@ export async function scheduleRoutineReminderNotification(
         where: {
           userId,
           targetType: "CUSTOM",
-          title: `Routine Reminder: ${routineTitle}`,
+          title: `Habit Reminder: ${routineTitle}`,
         },
       });
     });
@@ -1979,8 +2297,8 @@ export async function scheduleRoutineReminderNotification(
           userId,
           targetType: "CUSTOM",
           targetId: null,
-          title: `Routine Reminder: ${routineTitle}`,
-          note: `Your routine "${routineTitle}" is coming up soon`,
+          title: `Habit Reminder: ${routineTitle}`,
+          note: `Your habit "${routineTitle}" is coming up soon`,
           triggerType: "TIME",
           schedule: reminderSchedule as any,
         },
@@ -2031,6 +2349,7 @@ export async function scheduleRoutineReminderNotification(
 
 /**
  * Schedule notifications for all tasks in a routine
+ * ✅ ✅ ✅ ✅ ✅
  */
 const schedulingLocks = new Set<string>();
 
@@ -2040,9 +2359,6 @@ export async function scheduleRoutineNotifications(
 ): Promise<void> {
   // Prevent concurrent scheduling of the same routine
   if (schedulingLocks.has(routineId)) {
-    logger.warn(
-      `Routine ${routineId} is already being scheduled, skipping duplicate call`,
-    );
     return;
   }
 
@@ -2059,65 +2375,26 @@ export async function scheduleRoutineNotifications(
     logger.info(`scheduleRoutineNotifications routine`, routine);
 
     if (!routine || !routine.enabled) {
-      logger.info(
-        `Routine ${routineId} not found or disabled, skipping notification scheduling`,
-      );
       return;
     }
 
-    const schedule = routine.schedule as any;
+    const schedule = routine.schedule as RoutineSchedule;
     const userTimezone = routine.timezone || "UTC";
 
     // Calculate next occurrence for the routine
     logger.info(
       `**** Calculating next occurrence for routine ${routineId} ** `,
-      routine,
+      { routine },
     );
 
-    const now = new Date();
-    let nextOccurrence: Date | null = null;
+    const nextOccurrence = routine.nextOccurrenceAt;
 
-    // Parse time from schedule (this is UTC time from mobile)
-    const [routineHours, routineMinutes] = (schedule.time || "00:00")
-      .split(":")
-      .map(Number);
-
-    if (routine.frequency === "DAILY") {
-      nextOccurrence = new Date(now);
-      nextOccurrence.setUTCHours(routineHours, routineMinutes, 0, 0);
-      // Use a small buffer (1 second) to avoid edge cases when creating at exact routine time
-      if (nextOccurrence.getTime() <= now.getTime() + 1000) {
-        nextOccurrence.setUTCDate(nextOccurrence.getUTCDate() + 1);
-      }
-      logger.info(
-        `Calculated nextOccurrence for DAILY routine: ${nextOccurrence.toISOString()}, now: ${now.toISOString()}`,
-      );
-    } else if (
-      routine.frequency === "WEEKLY" &&
-      schedule.days &&
-      schedule.days.length > 0
-    ) {
-      const currentDay = now.getUTCDay();
-      let soonest: Date | null = null;
-      for (const day of schedule.days) {
-        const d = new Date(now);
-        const delta = (day - currentDay + 7) % 7;
-        d.setUTCDate(d.getUTCDate() + delta);
-        d.setUTCHours(routineHours, routineMinutes, 0, 0);
-        if (d <= now) {
-          d.setUTCDate(d.getUTCDate() + 7);
-        }
-        if (!soonest || d < soonest) soonest = d;
-      }
-      nextOccurrence = soonest;
-    } else if (routine.frequency === "MONTHLY" && schedule.day) {
-      nextOccurrence = new Date(now);
-      nextOccurrence.setUTCDate(schedule.day);
-      nextOccurrence.setUTCHours(routineHours, routineMinutes, 0, 0);
-      if (nextOccurrence <= now) {
-        nextOccurrence.setUTCMonth(nextOccurrence.getUTCMonth() + 1);
-      }
-    }
+    logger.info(`Using stored nextOccurrenceAt for routine ${routineId}`, {
+      routineId,
+      schedule,
+      timezone: userTimezone,
+      nextOccurrence: nextOccurrence?.toISOString(),
+    });
 
     // Schedule routine reminder if reminderBefore is set
     if (routine.reminderBefore && nextOccurrence) {
@@ -2157,6 +2434,7 @@ export async function scheduleRoutineNotifications(
         routine.frequency,
         schedule,
         routine.timezone,
+        nextOccurrence,
         task.id,
         task.title,
         task.reminderTime,
@@ -2177,193 +2455,3 @@ export async function scheduleRoutineNotifications(
     schedulingLocks.delete(routineId);
   }
 }
-
-// /**
-//  * Create an alarm for a routine reminder time
-//  */
-// async function createAlarmForRoutineReminder(
-//   routineId: string,
-//   taskId: string,
-//   userId: string,
-//   routineTitle: string,
-//   taskTitle: string,
-//   nextOccurrence: Date,
-//   frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY",
-//   schedule: { time?: string; days?: number[]; day?: number },
-//   timezone: string,
-//   reminderTime: string | null | undefined,
-//   reminderSchedule: any,
-//   reminderBefore?: string | null,
-// ): Promise<void> {
-//   try {
-//     // Cancel existing alarms for this routine task
-//     await withPrismaRetry(async (prisma) => {
-//       return await prisma.alarm.deleteMany({
-//         where: {
-//           userId,
-//           linkedTaskId: taskId,
-//         },
-//       });
-//     }).catch(() => {});
-
-//     // Calculate alarm time based on nextOccurrence and reminderBefore/reminderTime
-//     const alarmTime = new Date(nextOccurrence);
-
-//     if (reminderTime && reminderTime.includes(":")) {
-//       // Use task reminder time (already in UTC)
-//       const [reminderH, reminderM] = reminderTime.split(":").map(Number);
-//       alarmTime.setUTCHours(reminderH, reminderM, 0, 0);
-
-//       // If reminder time is after routine time, it means reminder is for previous day
-//       // (e.g., reminder at 23:00 for routine at 02:00 next day)
-//       const [routineH, routineM] = (schedule.time || "00:00")
-//         .split(":")
-//         .map(Number);
-//       const routineDate = new Date(nextOccurrence);
-//       routineDate.setUTCHours(routineH, routineM, 0, 0);
-
-//       // Compare just the time (ignore date)
-//       const alarmTimeOfDay =
-//         alarmTime.getUTCHours() * 60 + alarmTime.getUTCMinutes();
-//       const routineTimeOfDay =
-//         routineDate.getUTCHours() * 60 + routineDate.getUTCMinutes();
-
-//       // If alarm time is after routine time on the same day, it should be on the previous day
-//       // This handles cases where reminder is set for 23:00 and routine is at 02:00 (next day)
-//       if (alarmTimeOfDay > routineTimeOfDay) {
-//         alarmTime.setUTCDate(alarmTime.getUTCDate() - 1);
-//       }
-
-//       logger.info(
-//         `Using reminderTime: ${reminderTime}, alarm time set to: ${alarmTime.toISOString()}`,
-//       );
-//     } else if (reminderBefore) {
-//       // Use reminderBefore to calculate
-//       const match = reminderBefore.match(/^(\d+)([mhdw])$/);
-//       if (match) {
-//         const [, valueStr, unit] = match;
-//         const value = parseInt(valueStr, 10);
-
-//         if (unit === "m") {
-//           alarmTime.setUTCMinutes(alarmTime.getUTCMinutes() - value);
-//         } else if (unit === "h") {
-//           alarmTime.setUTCHours(alarmTime.getUTCHours() - value);
-//         } else if (unit === "d") {
-//           alarmTime.setUTCDate(alarmTime.getUTCDate() - value);
-//         } else if (unit === "w") {
-//           alarmTime.setUTCDate(alarmTime.getUTCDate() - value * 7);
-//         }
-
-//         logger.info(
-//           `Using reminderBefore: ${reminderBefore}, alarm time: ${alarmTime.toISOString()}`,
-//         );
-//       }
-//     }
-
-//     // Ensure alarm time is in the future
-//     const now = new Date();
-//     if (alarmTime <= now) {
-//       logger.warn(
-//         `Alarm time is in the past: ${alarmTime.toISOString()}, calculating next occurrence`,
-//       );
-
-//       // Move to next occurrence cycle
-//       if (frequency === "DAILY") {
-//         alarmTime.setUTCDate(alarmTime.getUTCDate() + 1);
-//       } else if (
-//         frequency === "WEEKLY" &&
-//         schedule.days &&
-//         schedule.days.length > 0
-//       ) {
-//         alarmTime.setUTCDate(alarmTime.getUTCDate() + 7);
-//       } else if (frequency === "MONTHLY" && schedule.day) {
-//         alarmTime.setUTCMonth(alarmTime.getUTCMonth() + 1);
-//       } else {
-//         alarmTime.setUTCDate(alarmTime.getUTCDate() + 1);
-//       }
-
-//       // Re-apply reminder offset
-//       if (reminderBefore) {
-//         const match = reminderBefore.match(/^(\d+)([mhdw])$/);
-//         if (match) {
-//           const [, valueStr, unit] = match;
-//           const value = parseInt(valueStr, 10);
-
-//           if (unit === "m") {
-//             alarmTime.setUTCMinutes(alarmTime.getUTCMinutes() - value);
-//           } else if (unit === "h") {
-//             alarmTime.setUTCHours(alarmTime.getUTCHours() - value);
-//           } else if (unit === "d") {
-//             alarmTime.setUTCDate(alarmTime.getUTCDate() - value);
-//           } else if (unit === "w") {
-//             alarmTime.setUTCDate(alarmTime.getUTCDate() - value * 7);
-//           }
-//         }
-//       } else if (reminderTime && reminderTime.includes(":")) {
-//         const [reminderH, reminderM] = reminderTime.split(":").map(Number);
-//         alarmTime.setUTCHours(reminderH, reminderM, 0, 0);
-//       }
-
-//       logger.info(
-//         `Adjusted alarm time to next occurrence: ${alarmTime.toISOString()}`,
-//       );
-//     }
-
-//     // Final check
-//     if (alarmTime <= now) {
-//       logger.error(
-//         `❌ Alarm time is still in the past after all calculations, skipping`,
-//       );
-//       return;
-//     }
-
-//     // Generate recurrence rule
-//     let recurrenceRule: string | null = null;
-//     if (frequency === "DAILY") {
-//       recurrenceRule = "FREQ=DAILY";
-//     } else if (
-//       frequency === "WEEKLY" &&
-//       schedule.days &&
-//       schedule.days.length > 0
-//     ) {
-//       const dayNames = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
-//       const byDay = schedule.days.map((day) => dayNames[day]).join(",");
-//       recurrenceRule = `FREQ=WEEKLY;BYDAY=${byDay}`;
-//     } else if (frequency === "MONTHLY" && schedule.day) {
-//       recurrenceRule = `FREQ=MONTHLY;BYMONTHDAY=${schedule.day}`;
-//     }
-
-//     // Create the alarm
-//     const alarm = await withPrismaRetry(async (prisma) => {
-//       return await prisma.alarm.create({
-//         data: {
-//           userId,
-//           title: `Routine: ${routineTitle} - ${taskTitle}`,
-//           time: alarmTime,
-//           timezone: timezone || "UTC",
-//           recurrenceRule,
-//           linkedTaskId: taskId,
-//           enabled: true,
-//           snoozeConfig: {
-//             duration: 5,
-//             maxSnoozes: 3,
-//           },
-//           smartWakeWindow: 5,
-//         },
-//       });
-//     });
-
-//     logger.info(`✅ Created alarm for routine task reminder`, {
-//       alarmId: alarm.id,
-//       routineId,
-//       taskId,
-//       alarmTime: alarmTime.toISOString(),
-//       recurrenceRule,
-//       reminderTime,
-//       reminderBefore,
-//     });
-//   } catch (error) {
-//     logger.error(`Failed to create alarm for routine reminder:`, error);
-//     throw error;
-//   }
-// }

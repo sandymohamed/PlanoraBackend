@@ -24,3 +24,9 @@ logs/
 google-services.json
 GoogleService-Info.plist
 taskmanager-firebase-adminsdk.json
+
+
+
+
+*.rar
+*.zip

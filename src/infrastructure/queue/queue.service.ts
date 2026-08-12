@@ -1,23 +1,25 @@
-import { Queue, Worker, Job } from 'bullmq';
-import { getRedisClient } from '../../shared/utils/redis';
-import { logger } from '../../shared/utils/logger';
+import { Queue, Worker, Job } from "bullmq";
+import { getRedisClient } from "../../shared/utils/redis";
+import { calculateNextOccurrence } from "../../shared/utils/routineSchedule";
+
+import { logger } from "../../shared/utils/logger";
 
 // Queue names
 export const QUEUE_NAMES = {
-  REMINDERS: 'reminders',
-  NOTIFICATIONS: 'notifications',
-  AI_PLAN_GENERATION: 'ai-plan-generation',
-  EMAIL: 'email',
-  CLEANUP: 'cleanup',
+  REMINDERS: "reminders",
+  NOTIFICATIONS: "notifications",
+  AI_PLAN_GENERATION: "ai-plan-generation",
+  EMAIL: "email",
+  CLEANUP: "cleanup",
 } as const;
 
 // Job types
 export const JOB_TYPES = {
-  SEND_REMINDER: 'send-reminder',
-  SEND_NOTIFICATION: 'send-notification',
-  GENERATE_PLAN: 'generate-plan',
-  SEND_EMAIL: 'send-email',
-  CLEANUP_OLD_DATA: 'cleanup-old-data',
+  SEND_REMINDER: "send-reminder",
+  SEND_NOTIFICATION: "send-notification",
+  GENERATE_PLAN: "generate-plan",
+  SEND_EMAIL: "send-email",
+  CLEANUP_OLD_DATA: "cleanup-old-data",
 } as const;
 
 // Queue instances
@@ -30,7 +32,7 @@ export const initializeQueues = async (): Promise<void> => {
   const redis = getRedisClient();
 
   // Initialize queues
-  Object.values(QUEUE_NAMES).forEach(queueName => {
+  Object.values(QUEUE_NAMES).forEach((queueName) => {
     queues[queueName] = new Queue(queueName, {
       connection: redis,
       defaultJobOptions: {
@@ -38,7 +40,7 @@ export const initializeQueues = async (): Promise<void> => {
         removeOnFail: 50,
         attempts: 3,
         backoff: {
-          type: 'exponential',
+          type: "exponential",
           delay: 2000,
         },
       },
@@ -48,7 +50,7 @@ export const initializeQueues = async (): Promise<void> => {
   // Initialize workers
   await initializeWorkers();
 
-  logger.info('All queues and workers initialized');
+  logger.info("All queues and workers initialized");
 };
 
 const initializeWorkers = async (): Promise<void> => {
@@ -74,7 +76,7 @@ const initializeWorkers = async (): Promise<void> => {
     {
       ...defaultWorkerOptions,
       concurrency: 10,
-    }
+    },
   );
 
   // Notification worker
@@ -86,7 +88,7 @@ const initializeWorkers = async (): Promise<void> => {
     {
       ...defaultWorkerOptions,
       concurrency: 20,
-    }
+    },
   );
 
   // // AI Plan Generation worker
@@ -111,7 +113,7 @@ const initializeWorkers = async (): Promise<void> => {
     {
       ...defaultWorkerOptions,
       concurrency: 10,
-    }
+    },
   );
 
   // Cleanup worker
@@ -124,25 +126,28 @@ const initializeWorkers = async (): Promise<void> => {
       ...defaultWorkerOptions,
       concurrency: 1,
       lockDuration: 600000, // 10 minutes for cleanup jobs that might take longer
-    }
+    },
   );
 
   // Set up error handling for all workers
-  Object.values(workers).forEach(worker => {
-    worker.on('error', (error: Error) => {
+  Object.values(workers).forEach((worker) => {
+    worker.on("error", (error: Error) => {
       // Handle "Missing lock" errors gracefully - these are often non-critical
       // They occur when locks expire during job retry/failure handling
-      if (error.message && error.message.includes('Missing lock')) {
-        logger.debug('Worker lock error (non-critical):', error.message);
+      if (error.message && error.message.includes("Missing lock")) {
+        logger.debug("Worker lock error (non-critical):", error.message);
         return;
       }
-      logger.error('Worker error:', error);
+      logger.error("Worker error:", error);
     });
 
-    worker.on('failed', (job, error) => {
+    worker.on("failed", (job, error) => {
       // Log "Missing lock" errors at debug level since they're often non-critical
-      if (error.message && error.message.includes('Missing lock')) {
-        logger.debug(`Job ${job?.id} lock error (non-critical):`, error.message);
+      if (error.message && error.message.includes("Missing lock")) {
+        logger.debug(
+          `Job ${job?.id} lock error (non-critical):`,
+          error.message,
+        );
         return;
       }
       logger.error(`Job ${job?.id} failed:`, error);
@@ -152,89 +157,123 @@ const initializeWorkers = async (): Promise<void> => {
 
 // Job processing functions
 
-// --- Helper: compute next occurrence for simple schedules ---
-function computeNextOccurrence(schedule: any, _timezone: string): Date | null {
-  try {
-    if (!schedule || typeof schedule !== 'object') {
-      logger.debug('computeNextOccurrence: schedule is not an object', { schedule });
-      return null;
-    }
+// // --- Helper: compute next occurrence for simple schedules ---
+// function computeNextOccurrence(schedule: any, _timezone: string): Date | null {
+//   try {
+//     if (!schedule || typeof schedule !== "object") {
+//       logger.debug("computeNextOccurrence: schedule is not an object", {
+//         schedule,
+//       });
+//       return null;
+//     }
 
-    // One-off at a specific ISO date: do not reschedule
-    if (schedule.at) {
-      logger.debug('computeNextOccurrence: one-off schedule, not rescheduling', { schedule });
-      return null;
-    }
+//     logger.info("computeNextOccurrence: calculating next occurrence", { schedule, timezone: _timezone });
+//     // One-off at a specific ISO date: do not reschedule
+//     if (schedule.at) {
+//       logger.warn(
+//         "computeNextOccurrence: one-off schedule, not rescheduling",
+//         { schedule },
+//       );
+//       return null;
+//     }
 
-    const now = new Date();
+//     const now = new Date();
 
-    if (schedule.frequency === 'DAILY' && schedule.time) {
-      const [hh, mm] = String(schedule.time).split(':').map((v: string) => parseInt(v, 10));
-      const next = new Date(now);
-      next.setHours(hh || 0, mm || 0, 0, 0);
-      if (next <= now) {
-        next.setDate(next.getDate() + 1);
-      }
-      logger.debug('computeNextOccurrence: calculated DAILY next occurrence', { next: next.toISOString(), schedule });
-      return next;
-    }
+//     logger.info("computeNextOccurrence: current time", { now: now.toISOString() });
+//     if (schedule.frequency === "DAILY" && schedule.time) {
+//       const [hh, mm] = String(schedule.time)
+//         .split(":")
+//         .map((v: string) => parseInt(v, 10));
+//       const next = new Date(now);
+//       next.setHours(hh || 0, mm || 0, 0, 0);
+//       if (next <= now) {
+//         next.setDate(next.getDate() + 1);
+//       }
+//       logger.debug("computeNextOccurrence: calculated DAILY next occurrence", {
+//         next: next.toISOString(),
+//         schedule,
+//       });
+//       return next;
+//     }
 
-    if (schedule.frequency === 'WEEKLY' && schedule.time) {
-      const [hh, mm] = String(schedule.time).split(':').map((v: string) => parseInt(v, 10));
-      const days: number[] = Array.isArray(schedule.days) && schedule.days.length > 0 ? schedule.days : [new Date().getDay()];
-      // Find soonest upcoming day/time
-      let soonest: Date | null = null;
-      for (const day of days) {
-        const d = new Date(now);
-        const delta = (day - d.getDay() + 7) % 7;
-        d.setDate(d.getDate() + delta);
-        d.setHours(hh || 0, mm || 0, 0, 0);
-        if (d <= now) {
-          d.setDate(d.getDate() + 7);
-        }
-        if (!soonest || d < soonest) soonest = d;
-      }
-      logger.debug('computeNextOccurrence: calculated WEEKLY next occurrence', { next: soonest?.toISOString(), schedule });
-      return soonest;
-    }
+//     if (schedule.frequency === "WEEKLY" && schedule.time) {
+//       const [hh, mm] = String(schedule.time)
+//         .split(":")
+//         .map((v: string) => parseInt(v, 10));
+//       const days: number[] =
+//         Array.isArray(schedule.days) && schedule.days.length > 0
+//           ? schedule.days
+//           : [new Date().getDay()];
+//       // Find soonest upcoming day/time
+//       let soonest: Date | null = null;
+//       for (const day of days) {
+//         const d = new Date(now);
+//         const delta = (day - d.getDay() + 7) % 7;
+//         d.setDate(d.getDate() + delta);
+//         d.setHours(hh || 0, mm || 0, 0, 0);
+//         if (d <= now) {
+//           d.setDate(d.getDate() + 7);
+//         }
+//         if (!soonest || d < soonest) soonest = d;
+//       }
+//       logger.debug("computeNextOccurrence: calculated WEEKLY next occurrence", {
+//         next: soonest?.toISOString(),
+//         schedule,
+//       });
+//       return soonest;
+//     }
 
-    if (schedule.frequency === 'MONTHLY' && schedule.time && schedule.day) {
-      const [hh, mm] = String(schedule.time).split(':').map((v: string) => parseInt(v, 10));
-      const targetDay = schedule.day;
-      const next = new Date(now);
-      next.setDate(targetDay);
-      next.setHours(hh || 0, mm || 0, 0, 0);
-      if (next <= now) {
-        next.setMonth(next.getMonth() + 1);
-        // Handle edge case where target day doesn't exist in next month (e.g., Feb 30)
-        // Adjust to last day of month if target day is too high
-        const daysInMonth = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
-        if (targetDay > daysInMonth) {
-          next.setDate(daysInMonth);
-        } else {
-          next.setDate(targetDay);
-        }
-      }
-      logger.debug('computeNextOccurrence: calculated MONTHLY next occurrence', { next: next.toISOString(), schedule });
-      return next;
-    }
+//     if (schedule.frequency === "MONTHLY" && schedule.time && schedule.day) {
+//       const [hh, mm] = String(schedule.time)
+//         .split(":")
+//         .map((v: string) => parseInt(v, 10));
+//       const targetDay = schedule.day;
+//       const next = new Date(now);
+//       next.setDate(targetDay);
+//       next.setHours(hh || 0, mm || 0, 0, 0);
+//       if (next <= now) {
+//         next.setMonth(next.getMonth() + 1);
+//         // Handle edge case where target day doesn't exist in next month (e.g., Feb 30)
+//         // Adjust to last day of month if target day is too high
+//         const daysInMonth = new Date(
+//           next.getFullYear(),
+//           next.getMonth() + 1,
+//           0,
+//         ).getDate();
+//         if (targetDay > daysInMonth) {
+//           next.setDate(daysInMonth);
+//         } else {
+//           next.setDate(targetDay);
+//         }
+//       }
+//       logger.debug(
+//         "computeNextOccurrence: calculated MONTHLY next occurrence",
+//         { next: next.toISOString(), schedule },
+//       );
+//       return next;
+//     }
 
-    logger.warn('computeNextOccurrence: unsupported schedule format', { schedule, frequency: schedule.frequency });
-    return null;
-  } catch (error) {
-    logger.error('computeNextOccurrence: error calculating next occurrence', { error, schedule });
-    return null;
-  }
-}
+//     logger.warn("computeNextOccurrence: unsupported schedule format", {
+//       schedule,
+//       frequency: schedule.frequency,
+//     });
+//     return null;
+//   } catch (error) {
+//     logger.error("computeNextOccurrence: error calculating next occurrence", {
+//       error,
+//       schedule,
+//     });
+//     return null;
+//   }
+// }
 
 async function processReminderJob(job: Job): Promise<void> {
   const { reminderId, userId, type } = job.data;
 
-  logger.info(`Processing reminder job: ${reminderId}`, { type, userId });
-
   try {
-    const { pushNotificationService } = await import('./pushNotification.service');
-    const { getPrismaClient } = await import('../../shared/utils/database');
+    const { pushNotificationService } =
+      await import("./pushNotification.service");
+    const { getPrismaClient } = await import("../../shared/utils/database");
     const prisma = getPrismaClient();
 
     // Get reminder record
@@ -247,12 +286,12 @@ async function processReminderJob(job: Job): Promise<void> {
       return;
     }
 
-    logger.info(`Reminder found: ${reminderId}`, { 
-      title: reminder.title, 
+    logger.info(`Reminder found: ${reminderId}`, {
+      title: reminder.title,
       note: reminder.note,
       targetType: reminder.targetType,
       targetId: reminder.targetId,
-      schedule: reminder.schedule 
+      schedule: reminder.schedule,
     });
 
     // Check user notification preferences
@@ -264,7 +303,7 @@ async function processReminderJob(job: Job): Promise<void> {
     const settings = (user?.settings as any) || {};
     const notificationSettings = settings.notifications || {};
 
-    logger.info('Notification settings check for reminder', {
+    logger.info("Notification settings check for reminder", {
       userId,
       type,
       reminderId,
@@ -278,34 +317,57 @@ async function processReminderJob(job: Job): Promise<void> {
     // Default to true (enabled) unless explicitly set to false
     let shouldSendPush = notificationSettings.pushNotifications !== false;
 
-    if (type === 'TASK_REMINDER' && notificationSettings.taskReminders === false) {
+    if (
+      type === "TASK_REMINDER" &&
+      notificationSettings.taskReminders === false
+    ) {
       shouldSendPush = false;
-      logger.debug('Push notification disabled: taskReminders setting', { type });
-    } else if (type === 'GOAL_REMINDER' && notificationSettings.goalReminders === false) {
-      shouldSendPush = false;
-      logger.debug('Push notification disabled: goalReminders setting', { type });
-    } else if (type === 'DUE_DATE_REMINDER' && notificationSettings.dueDateReminders === false) {
-      shouldSendPush = false;
-      logger.debug('Push notification disabled: dueDateReminders setting', { type });
-    } else if (type === 'ROUTINE_REMINDER' && notificationSettings.routineReminders === false) {
-      shouldSendPush = false;
-      logger.info('Push notification disabled: routineReminders setting is false', { 
+      logger.debug("Push notification disabled: taskReminders setting", {
         type,
-        userId,
-        reminderId,
-        routineReminders: notificationSettings.routineReminders,
       });
-    } else if (type === 'ROUTINE_REMINDER') {
+    } else if (
+      type === "GOAL_REMINDER" &&
+      notificationSettings.goalReminders === false
+    ) {
+      shouldSendPush = false;
+      logger.debug("Push notification disabled: goalReminders setting", {
+        type,
+      });
+    } else if (
+      type === "DUE_DATE_REMINDER" &&
+      notificationSettings.dueDateReminders === false
+    ) {
+      shouldSendPush = false;
+      logger.debug("Push notification disabled: dueDateReminders setting", {
+        type,
+      });
+    } else if (
+      type === "ROUTINE_REMINDER" &&
+      notificationSettings.routineReminders === false
+    ) {
+      shouldSendPush = false;
+      logger.info(
+        "Push notification disabled: routineReminders setting is false",
+        {
+          type,
+          userId,
+          reminderId,
+          routineReminders: notificationSettings.routineReminders,
+        },
+      );
+    } else if (type === "ROUTINE_REMINDER") {
       // Check if the routine is still enabled before sending notification
       const schedule: any = reminder.schedule as any;
       let routineId = schedule?.routineId;
       let routine: { enabled: boolean; userId: string } | null = null;
-      
+
       // If routineId is not directly in schedule but taskId is, look up the routine through the task
       if (!routineId && schedule?.taskId) {
         const routineTask = await prisma.routineTask.findUnique({
           where: { id: schedule.taskId },
-          include: { routine: { select: { id: true, enabled: true, userId: true } } },
+          include: {
+            routine: { select: { id: true, enabled: true, userId: true } },
+          },
         });
         if (routineTask?.routine) {
           routineId = routineTask.routine.id;
@@ -319,36 +381,51 @@ async function processReminderJob(job: Job): Promise<void> {
       }
 
       // Only send notification if routine exists, is enabled, and belongs to the user
-      if (routineId && (!routine || !routine.enabled || routine.userId !== userId)) {
+      if (
+        routineId &&
+        (!routine || !routine.enabled || routine.userId !== userId)
+      ) {
         shouldSendPush = false;
-        logger.info('Push notification skipped: routine is disabled or not found', {
-          type,
-          userId,
-          reminderId,
-          routineId,
-          taskId: schedule?.taskId,
-          routineEnabled: routine?.enabled,
-          routineExists: !!routine,
-        });
-        
-        // Cancel the reminder if routine is disabled
-        if (!routine || !routine.enabled) {
-          logger.info(`Skipping reschedule for reminder ${reminderId}: routine is disabled`, {
+        logger.info(
+          "Push notification skipped: routine is disabled or not found",
+          {
+            type,
+            userId,
             reminderId,
             routineId,
-            enabled: routine?.enabled,
-          });
+            taskId: schedule?.taskId,
+            routineEnabled: routine?.enabled,
+            routineExists: !!routine,
+          },
+        );
+
+        // Cancel the reminder if routine is disabled
+        if (!routine || !routine.enabled) {
+          logger.info(
+            `Skipping reschedule for reminder ${reminderId}: routine is disabled`,
+            {
+              reminderId,
+              routineId,
+              enabled: routine?.enabled,
+            },
+          );
           // Cancel the reminder if routine is disabled
-          await prisma.reminder.delete({
-            where: { id: reminderId },
-          }).catch(err => logger.error(`Failed to delete reminder ${reminderId}:`, err));
-          logger.info(`Reminder job completed (cancelled due to disabled routine): ${reminderId}`);
+          await prisma.reminder
+            .delete({
+              where: { id: reminderId },
+            })
+            .catch((err) =>
+              logger.error(`Failed to delete reminder ${reminderId}:`, err),
+            );
+          logger.info(
+            `Reminder job completed (cancelled due to disabled routine): ${reminderId}`,
+          );
           return;
         }
       }
 
       // Log when routine reminders are enabled
-      logger.debug('Routine reminder notification enabled', {
+      logger.debug("Routine reminder notification enabled", {
         type,
         userId,
         reminderId,
@@ -370,29 +447,33 @@ async function processReminderJob(job: Job): Promise<void> {
         type: String(type),
         targetType: String(reminder.targetType),
       };
-      
+
       if (reminder.targetId) {
         notificationData.targetId = String(reminder.targetId);
       }
 
       // For task and routine reminders, use alarm sound so they ring like alarms
       // NOTE: These reminders don't have native alarms, so push notifications should ring
-      const isReminderType = type === 'TASK_REMINDER' || 
-                             type === 'DUE_DATE_REMINDER' || 
-                             type === 'ROUTINE_REMINDER';
-      const soundToUse = isReminderType ? 'alarm' : 'default';
-      
-      await pushNotificationService.sendPushNotification(
+      const isReminderType =
+        type === "TASK_REMINDER" ||
+        type === "DUE_DATE_REMINDER" ||
+        type === "ROUTINE_REMINDER";
+      const soundToUse = isReminderType ? "alarm" : "default";
+
+      const res = await pushNotificationService.sendPushNotification(
         userId,
         {
           title: reminder.title,
-          body: reminder.note || 'Reminder',
+          body: reminder.note || "Reminder",
           data: notificationData,
           sound: soundToUse, // Use alarm sound for reminders so they ring (they don't have native alarms)
         },
-        false // Already checked preferences above
+        false, // Already checked preferences above
       );
-      logger.info(`Push notification sent successfully for reminder ${reminderId}`);
+      logger.info(`Push notification res: ${JSON.stringify(res)}`);
+      logger.info(
+        `Push notification sent successfully for reminder ${reminderId}`,
+      );
     } else {
       logger.warn(`Push notification not sent for reminder ${reminderId}`, {
         shouldSendPush,
@@ -404,7 +485,8 @@ async function processReminderJob(job: Job): Promise<void> {
     // Schedule next occurrence if recurring-like schedule is present
     try {
       const schedule: any = reminder.schedule as any;
-      logger.debug('Attempting to reschedule reminder', {
+      const frequency = schedule.frequency;
+      logger.debug("Attempting to reschedule reminder", {
         reminderId,
         schedule,
         type,
@@ -415,11 +497,13 @@ async function processReminderJob(job: Job): Promise<void> {
       // { frequency: 'MONTHLY', time: 'HH:mm', day: 1-31 }
       // { at: 'ISO_DATE' } // one-off (no reschedule)
       // Use timezone from schedule if provided (for routine reminders), otherwise from user settings
-      const scheduleTimezone = schedule.timezone || (user?.settings as any)?.timezone || 'UTC';
-      
+      const scheduleTimezone =
+        schedule.timezone || (user?.settings as any)?.timezone || "UTC";
+
       // For routine reminders, calculate next reminder time (routine time - reminderBefore)
       let next: Date | null = null;
-      if (type === 'ROUTINE_REMINDER' && schedule.reminderBefore) {
+      logger.info(`next 1: ${next}`);
+      if (type === "ROUTINE_REMINDER" && schedule.reminderBefore) {
         // Check if routine is still enabled before rescheduling
         if (schedule.routineId) {
           const routine = await prisma.routine.findUnique({
@@ -428,23 +512,32 @@ async function processReminderJob(job: Job): Promise<void> {
           });
 
           if (!routine || !routine.enabled || routine.userId !== userId) {
-            logger.info(`Skipping reschedule for reminder ${reminderId}: routine is disabled or not found`, {
-              reminderId,
-              routineId: schedule.routineId,
-              enabled: routine?.enabled,
-              routineExists: !!routine,
-            });
+            logger.info(
+              `Skipping reschedule for reminder ${reminderId}: routine is disabled or not found`,
+              {
+                reminderId,
+                routineId: schedule.routineId,
+                enabled: routine?.enabled,
+                routineExists: !!routine,
+              },
+            );
             // Cancel the reminder if routine is disabled
-            await prisma.reminder.delete({
-              where: { id: reminderId },
-            }).catch(err => logger.error(`Failed to delete reminder ${reminderId}:`, err));
-            logger.info(`Reminder job completed (cancelled due to disabled routine during reschedule): ${reminderId}`);
+            await prisma.reminder
+              .delete({
+                where: { id: reminderId },
+              })
+              .catch((err) =>
+                logger.error(`Failed to delete reminder ${reminderId}:`, err),
+              );
+            logger.info(
+              `Reminder job completed (cancelled due to disabled routine during reschedule): ${reminderId}`,
+            );
             return;
           }
         }
 
         // Calculate next routine occurrence
-        const routineNext = computeNextOccurrence(schedule, scheduleTimezone);
+        const routineNext = calculateNextOccurrence(frequency,schedule, scheduleTimezone);
         if (routineNext) {
           // Calculate reminder time by subtracting reminderBefore
           const match = schedule.reminderBefore.match(/^(\d+)([mhdw])$/);
@@ -452,114 +545,157 @@ async function processReminderJob(job: Job): Promise<void> {
             const [, valueStr, unit] = match;
             const value = parseInt(valueStr, 10);
             next = new Date(routineNext);
-            
-            if (unit === 'm') {
+            logger.info(`next 2: ${next}`);
+            if (unit === "m") {
               next.setMinutes(next.getMinutes() - value);
-            } else if (unit === 'h') {
+            } else if (unit === "h") {
               next.setHours(next.getHours() - value);
-            } else if (unit === 'd') {
+            } else if (unit === "d") {
               next.setDate(next.getDate() - value);
-            } else if (unit === 'w') {
-              next.setDate(next.getDate() - (value * 7));
+            } else if (unit === "w") {
+              next.setDate(next.getDate() - value * 7);
             }
-            
+            logger.info(`next 3: ${next}`);
             // If the calculated reminder time is in the past, calculate the next one
             const now = new Date();
             if (next <= now) {
-              logger.info(`Calculated reminder time is in the past, calculating next occurrence`, {
-                reminderId,
-                calculatedTime: next.toISOString(),
-                now: now.toISOString(),
-              });
-              
+              logger.info(
+                `Calculated reminder time is in the past, calculating next occurrence`,
+                {
+                  reminderId,
+                  calculatedTime: next.toISOString(),
+                  now: now.toISOString(),
+                },
+              );
+
               // Calculate the next routine occurrence after the current one
               // We need to find the next routine occurrence that gives us a future reminder time
               const nextRoutineOccurrence = new Date(routineNext);
               let attempts = 0;
               const maxAttempts = 12; // Prevent infinite loop (e.g., 12 months for monthly)
-              
+
               while (next <= now && attempts < maxAttempts) {
                 attempts++;
-                
+
                 // Move to next occurrence based on frequency
-                if (schedule.frequency === 'DAILY') {
-                  nextRoutineOccurrence.setDate(nextRoutineOccurrence.getDate() + 1);
-                } else if (schedule.frequency === 'WEEKLY' && schedule.days) {
-                  nextRoutineOccurrence.setDate(nextRoutineOccurrence.getDate() + 7);
-                } else if (schedule.frequency === 'MONTHLY' && schedule.day) {
-                  nextRoutineOccurrence.setMonth(nextRoutineOccurrence.getMonth() + 1);
+                if (schedule.frequency === "DAILY") {
+                  nextRoutineOccurrence.setDate(
+                    nextRoutineOccurrence.getDate() + 1,
+                  );
+                } else if (schedule.frequency === "WEEKLY" && schedule.days) {
+                  nextRoutineOccurrence.setDate(
+                    nextRoutineOccurrence.getDate() + 7,
+                  );
+                } else if (schedule.frequency === "MONTHLY" && schedule.day) {
+                  nextRoutineOccurrence.setMonth(
+                    nextRoutineOccurrence.getMonth() + 1,
+                  );
                   // Handle edge case where target day doesn't exist in next month
-                  const daysInMonth = new Date(nextRoutineOccurrence.getFullYear(), nextRoutineOccurrence.getMonth() + 1, 0).getDate();
+                  const daysInMonth = new Date(
+                    nextRoutineOccurrence.getFullYear(),
+                    nextRoutineOccurrence.getMonth() + 1,
+                    0,
+                  ).getDate();
                   if (schedule.day > daysInMonth) {
                     nextRoutineOccurrence.setDate(daysInMonth);
                   } else {
                     nextRoutineOccurrence.setDate(schedule.day);
                   }
-                  const [hh, mm] = String(schedule.time).split(':').map((v: string) => parseInt(v, 10));
+                  const [hh, mm] = String(schedule.time)
+                    .split(":")
+                    .map((v: string) => parseInt(v, 10));
                   nextRoutineOccurrence.setHours(hh || 0, mm || 0, 0, 0);
                 } else {
                   break; // Unsupported frequency
                 }
-                
+
                 // Recalculate reminder time from new routine occurrence
                 next = new Date(nextRoutineOccurrence);
-                if (unit === 'm') {
+                logger.info(`next 4: ${next}`);
+                if (unit === "m") {
                   next.setMinutes(next.getMinutes() - value);
-                } else if (unit === 'h') {
+                } else if (unit === "h") {
                   next.setHours(next.getHours() - value);
-                } else if (unit === 'd') {
+                } else if (unit === "d") {
                   next.setDate(next.getDate() - value);
-                } else if (unit === 'w') {
-                  next.setDate(next.getDate() - (value * 7));
+                } else if (unit === "w") {
+                  next.setDate(next.getDate() - value * 7);
                 }
               }
-              
+              logger.info(`next 5: ${next}`);
+
               if (next <= now) {
-                logger.warn(`Could not find future reminder time after ${attempts} attempts`, {
-                  reminderId,
-                  lastCalculated: next.toISOString(),
-                  now: now.toISOString(),
-                });
+                logger.warn(
+                  `Could not find future reminder time after ${attempts} attempts`,
+                  {
+                    reminderId,
+                    lastCalculated: next.toISOString(),
+                    now: now.toISOString(),
+                  },
+                );
                 next = null;
               } else {
-                logger.info(`Found future reminder time after ${attempts} attempt(s)`, {
-                  reminderId,
-                  reminderTime: next.toISOString(),
-                  routineOccurrence: nextRoutineOccurrence.toISOString(),
-                });
+                logger.info(
+                  `Found future reminder time after ${attempts} attempt(s)`,
+                  {
+                    reminderId,
+                    reminderTime: next.toISOString(),
+                    routineOccurrence: nextRoutineOccurrence.toISOString(),
+                  },
+                );
               }
             }
-            
+            logger.info(`next 6: ${next}`);
             if (next) {
-              logger.info(`Calculated next reminder time for routine reminder`, {
-                reminderId,
-                routineNext: routineNext.toISOString(),
-                reminderBefore: schedule.reminderBefore,
-                reminderTime: next.toISOString(),
-              });
+              logger.info(`next 7: ${next}`);
+              logger.info(
+                `Calculated next reminder time for routine reminder`,
+                {
+                  reminderId,
+                  routineNext: routineNext.toISOString(),
+                  reminderBefore: schedule.reminderBefore,
+                  reminderTime: next.toISOString(),
+                },
+              );
             }
           }
         }
       } else {
+        logger.info(`Calculating next occurrence for non-routine reminder ${reminderId}`, {
+          type,
+          schedule,
+        });
         // For other reminder types, use routine occurrence directly
-        next = computeNextOccurrence(schedule, scheduleTimezone);
+        next = calculateNextOccurrence(frequency,schedule, scheduleTimezone);
+        logger.info(`next 8: ${next}`);
       }
-      
+
       if (next) {
         await scheduleReminder(reminderId, userId, next, type);
-        logger.info(`Rescheduled recurring reminder ${reminderId} for ${next.toISOString()}`, {
-          type,
-          schedule,
-          nextOccurrence: next.toISOString(),
-        });
+        logger.info(
+          `Rescheduled recurring reminder ${reminderId} for ${next.toISOString()}`,
+          {
+            type,
+            schedule,
+            nextOccurrence: next.toISOString(),
+          },
+        );
       } else {
-        logger.warn(`Could not compute next occurrence for reminder ${reminderId}`, {
-          schedule,
-          type,
-        });
+        logger.warn(`Could not compute next occurrence at Next: ${next}`);
+
+        logger.warn(
+          `Could not compute next occurrence for reminder ${reminderId}`,
+          {
+            schedule,
+            type,
+          },
+        );
       }
     } catch (rescheduleError) {
-      logger.error(`Could not reschedule reminder ${reminderId}:`, rescheduleError);
+      logger.error(
+        `Could not reschedule reminder ${reminderId}:`,
+        rescheduleError,
+      );
     }
 
     logger.info(`Reminder job completed: ${reminderId}`);
@@ -575,8 +711,9 @@ async function processNotificationJob(job: Job): Promise<void> {
   logger.info(`Processing notification job: ${notificationId}`);
 
   try {
-    const { pushNotificationService } = await import('./pushNotification.service');
-    const { getPrismaClient } = await import('../../shared/utils/database');
+    const { pushNotificationService } =
+      await import("./pushNotification.service");
+    const { getPrismaClient } = await import("../../shared/utils/database");
     const prisma = getPrismaClient();
 
     // Get notification record from database
@@ -601,25 +738,43 @@ async function processNotificationJob(job: Job): Promise<void> {
     // Determine if push notification should be sent based on type
     let shouldSendPush = notificationSettings.pushNotifications !== false;
 
-    if (type === 'PROJECT_INVITATION' && notificationSettings.projectInvitations === false) {
+    if (
+      type === "PROJECT_INVITATION" &&
+      notificationSettings.projectInvitations === false
+    ) {
       shouldSendPush = false;
-    } else if (type === 'TASK_ASSIGNMENT' && notificationSettings.taskAssignments === false) {
+    } else if (
+      type === "TASK_ASSIGNMENT" &&
+      notificationSettings.taskAssignments === false
+    ) {
       shouldSendPush = false;
-    } else if (type === 'TASK_COMMENT' && notificationSettings.taskComments === false) {
+    } else if (
+      type === "TASK_COMMENT" &&
+      notificationSettings.taskComments === false
+    ) {
       shouldSendPush = false;
-    } else if (type === 'TASK_REMINDER' && notificationSettings.taskReminders === false) {
+    } else if (
+      type === "TASK_REMINDER" &&
+      notificationSettings.taskReminders === false
+    ) {
       shouldSendPush = false;
-    } else if (type === 'GOAL_REMINDER' && notificationSettings.goalReminders === false) {
+    } else if (
+      type === "GOAL_REMINDER" &&
+      notificationSettings.goalReminders === false
+    ) {
       shouldSendPush = false;
-    } else if (type === 'DUE_DATE_REMINDER' && notificationSettings.dueDateReminders === false) {
+    } else if (
+      type === "DUE_DATE_REMINDER" &&
+      notificationSettings.dueDateReminders === false
+    ) {
       shouldSendPush = false;
     }
 
     // Send push notification if enabled
     if (shouldSendPush && pushNotificationService.isAvailable()) {
       const notificationPayload = notification.payload as any;
-      const title = notificationPayload.title || 'New Notification';
-      const body = notificationPayload.body || 'You have a new notification';
+      const title = notificationPayload.title || "New Notification";
+      const body = notificationPayload.body || "You have a new notification";
 
       await pushNotificationService.sendPushNotification(
         userId,
@@ -631,9 +786,9 @@ async function processNotificationJob(job: Job): Promise<void> {
             type,
             ...notificationPayload,
           },
-          sound: 'default',
+          sound: "default",
         },
-        false // Already checked preferences above
+        false, // Already checked preferences above
       );
     }
 
@@ -641,7 +796,7 @@ async function processNotificationJob(job: Job): Promise<void> {
     await prisma.notification.update({
       where: { id: notificationId },
       data: {
-        status: 'SENT',
+        status: "SENT",
         sentAt: new Date(),
       },
     });
@@ -649,21 +804,24 @@ async function processNotificationJob(job: Job): Promise<void> {
     logger.info(`Notification job completed: ${notificationId}`);
   } catch (error) {
     logger.error(`Notification job failed: ${notificationId}`, error);
-    
+
     // Update notification status to FAILED
     try {
-      const { getPrismaClient } = await import('../../shared/utils/database');
+      const { getPrismaClient } = await import("../../shared/utils/database");
       const prisma = getPrismaClient();
       await prisma.notification.update({
         where: { id: notificationId },
         data: {
-          status: 'FAILED',
+          status: "FAILED",
         },
       });
     } catch (updateError) {
-      logger.error(`Failed to update notification status: ${notificationId}`, updateError);
+      logger.error(
+        `Failed to update notification status: ${notificationId}`,
+        updateError,
+      );
     }
-    
+
     throw error;
   }
 }
@@ -726,7 +884,12 @@ async function processCleanupJob(job: Job): Promise<void> {
 }
 
 // Queue management functions
-export const addJob = async (queueName: string, jobType: string, data: any, options?: any): Promise<Job> => {
+export const addJob = async (
+  queueName: string,
+  jobType: string,
+  data: any,
+  options?: any,
+): Promise<Job> => {
   const queue = queues[queueName];
   if (!queue) {
     throw new Error(`Queue ${queueName} not found`);
@@ -740,7 +903,7 @@ export const scheduleJob = async (
   jobType: string,
   data: any,
   delay: number,
-  options?: any
+  options?: any,
 ): Promise<Job> => {
   const queue = queues[queueName];
   if (!queue) {
@@ -763,10 +926,10 @@ export const getWorker = (queueName: string): Worker | undefined => {
 
 export const closeAllQueues = async (): Promise<void> => {
   await Promise.all([
-    ...Object.values(queues).map(queue => queue.close()),
-    ...Object.values(workers).map(worker => worker.close()),
+    ...Object.values(queues).map((queue) => queue.close()),
+    ...Object.values(workers).map((worker) => worker.close()),
   ]);
-  logger.info('All queues and workers closed');
+  logger.info("All queues and workers closed");
 };
 
 // Specific job scheduling functions
@@ -774,18 +937,21 @@ export const scheduleReminder = async (
   reminderId: string,
   userId: string,
   scheduledFor: Date,
-  type: string = 'time'
+  type: string = "time",
 ): Promise<Job> => {
+  logger.info(
+    `Scheduling reminder job: ${reminderId} for user: ${userId} at ${scheduledFor.toISOString()} with type: ${type}`,
+  );
   const delay = scheduledFor.getTime() - Date.now();
   if (delay <= 0) {
-    throw new Error('Cannot schedule reminder in the past');
+    throw new Error("Cannot schedule reminder in the past");
   }
 
   return await scheduleJob(
     QUEUE_NAMES.REMINDERS,
     JOB_TYPES.SEND_REMINDER,
     { reminderId, userId, type },
-    delay
+    delay,
   );
 };
 
@@ -794,31 +960,31 @@ export const scheduleNotification = async (
   userId: string,
   scheduledFor: Date,
   type: string,
-  payload: any
+  payload: any,
 ): Promise<Job> => {
   const delay = scheduledFor.getTime() - Date.now();
   if (delay <= 0) {
-    throw new Error('Cannot schedule notification in the past');
+    throw new Error("Cannot schedule notification in the past");
   }
 
   return await scheduleJob(
     QUEUE_NAMES.NOTIFICATIONS,
     JOB_TYPES.SEND_NOTIFICATION,
     { notificationId, userId, type, payload },
-    delay
+    delay,
   );
 };
 
 export const scheduleAIPlanGeneration = async (
   goalId: string,
   userId: string,
-  promptOptions: any
+  promptOptions: any,
 ): Promise<Job> => {
-  return await addJob(
-    QUEUE_NAMES.AI_PLAN_GENERATION,
-    JOB_TYPES.GENERATE_PLAN,
-    { goalId, userId, promptOptions }
-  );
+  return await addJob(QUEUE_NAMES.AI_PLAN_GENERATION, JOB_TYPES.GENERATE_PLAN, {
+    goalId,
+    userId,
+    promptOptions,
+  });
 };
 
 export const scheduleEmail = async (
@@ -826,21 +992,25 @@ export const scheduleEmail = async (
   subject: string,
   body: string,
   template?: string,
-  data?: any
+  data?: any,
 ): Promise<Job> => {
-  return await addJob(
-    QUEUE_NAMES.EMAIL,
-    JOB_TYPES.SEND_EMAIL,
-    { to, subject, body, template, data }
-  );
+  return await addJob(QUEUE_NAMES.EMAIL, JOB_TYPES.SEND_EMAIL, {
+    to,
+    subject,
+    body,
+    template,
+    data,
+  });
 };
 
-export const scheduleCleanup = async (type: string, delay: number = 0): Promise<Job> => {
+export const scheduleCleanup = async (
+  type: string,
+  delay: number = 0,
+): Promise<Job> => {
   return await scheduleJob(
     QUEUE_NAMES.CLEANUP,
     JOB_TYPES.CLEANUP_OLD_DATA,
     { type },
-    delay
+    delay,
   );
 };
-

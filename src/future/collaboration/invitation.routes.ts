@@ -29,19 +29,14 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { error, value } = createInvitationSchema.validate(req.body);
     
-    // console.log('value', value);
-    // console.log('error', error);
     if (error) {
       throw new ValidationError(error.details[0].message);
     }
     
     const { projectId } = value;
-    // console.log('projectId', projectId);
     
     const userId = req.user!.id;
-    // console.log('userId', userId);
     const prisma = getPrismaClient();
-    // console.log('prisma', prisma);
     
     // Check if user has permission to invite (owner or editor)
     const project = await prisma.project.findFirst({
@@ -53,7 +48,6 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         ],
       },
     });
-        // console.log('project', project);
         
         if (!project) {
           throw new AuthorizationError('You do not have permission to invite members to this project');
@@ -65,7 +59,6 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       role: value.role,
       invitedBy: userId,
     });
-    // console.log('invitation', invitation);
 
     logger.info('Invitation created', { invitationId: invitation.id, projectId: value.projectId, invitedBy: userId });
 

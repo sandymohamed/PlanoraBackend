@@ -300,15 +300,117 @@ function inferCategory(input: OfflinePlanInput): OfflineCategory {
   return 'general';
 }
 
-function recurrenceFor(theme: ThemeTemplate, taskIndex: number, weekDays: number): string | undefined {
-  if (!theme.recurrence || taskIndex !== 0 || weekDays < 5) return undefined;
-  if (theme.recurrence === 'daily') return 'RRULE:FREQ=DAILY;COUNT=3';
-  return 'RRULE:FREQ=WEEKLY;COUNT=3';
+// function recurrenceFor(theme: ThemeTemplate, taskIndex: number, weekDays: number): string | undefined {
+//   if (!theme.recurrence || taskIndex !== 0 || weekDays < 5) return undefined;
+//   if (theme.recurrence === 'daily') return 'RRULE:FREQ=DAILY;COUNT=3';
+//   return 'RRULE:FREQ=WEEKLY;COUNT=3';
+// }
+
+// /**
+//  * Generate a structured plan without any external API.
+//  * Output matches GeneratedPlan for existing routes/DB persistence.
+//  */
+// export function generateOfflinePlan(input: OfflinePlanInput): GeneratedPlan {
+//   const durationDays = clamp(Math.round(input.durationDays), 7, 365);
+//   const hoursPerDay = clamp(Math.round(input.hoursPerDay * 10) / 10, 1, 12);
+//   const goal = input.goal.trim() || 'Your goal';
+//   const category = inferCategory(input);
+//   const themes = CATEGORY_TEMPLATES[category];
+
+//   const weekCount = Math.max(1, Math.ceil(durationDays / 7));
+//   const start = new Date();
+//   start.setHours(0, 0, 0, 0);
+
+//   const milestones: GeneratedMilestone[] = [];
+//   const tasks: GeneratedTask[] = [];
+//   let dayOffset = 0;
+//   let cumulativeMilestoneDays = 0;
+
+//   for (let w = 0; w < weekCount; w++) {
+//     const theme = themes[w % themes.length];
+//     const daysInWeek =
+//       w === weekCount - 1 ? durationDays - w * 7 : Math.min(7, durationDays - w * 7);
+//     const weekDays = clamp(daysInWeek, 1, 7);
+//     cumulativeMilestoneDays += weekDays;
+
+//     const milestoneEndOffset = Math.min(cumulativeMilestoneDays - 1, durationDays - 1);
+
+//     milestones.push({
+//       title: `Week ${w + 1}: ${theme.title}`,
+//       durationDays: weekDays,
+//       targetDate: addDays(start, milestoneEndOffset),
+//       description: `${theme.focus} for "${goal}".`,
+//       tasks: [],
+//     });
+
+//     const tasksPerWeek = clamp(Math.floor(hoursPerDay / 2) + 1, 2, 5);
+//     const sessionMinutes = clamp(Math.round((hoursPerDay * 60) / tasksPerWeek), 30, 180);
+
+//     for (let t = 0; t < tasksPerWeek; t++) {
+//       const offsetInWeek = Math.floor((t / tasksPerWeek) * (weekDays - 1));
+//       const dueOffsetDays = dayOffset + offsetInWeek;
+
+//       if (dueOffsetDays >= durationDays) break;
+
+//       const taskTitles = buildTaskTitle(goal, theme, t);
+//       tasks.push({
+//         title: taskTitles,
+//         milestoneIndex: w,
+//         dueOffsetDays,
+//         durationMinutes: sessionMinutes,
+//         recurrence: recurrenceFor(theme, t, weekDays),
+//         description: `~${sessionMinutes} min · ${hoursPerDay}h/day budget · ${category} plan`,
+//       });
+//     }
+
+//     dayOffset += weekDays;
+//   }
+
+//   logger.info('[AI OFFLINE MODE USED]', {
+//     goal: goal.substring(0, 60),
+//     durationDays,
+//     hoursPerDay,
+//     category,
+//     weeks: weekCount,
+//     milestones: milestones.length,
+//     tasks: tasks.length,
+//   });
+
+//   return {
+//     milestones,
+//     tasks,
+//     notes:
+//       `Plan generated locally (offline mode) as a ${category} plan for "${goal}" over ${durationDays} days ` +
+//       `at ~${hoursPerDay}h/day. Adjust tasks to fit your schedule.`,
+//   };
+// }
+
+// function buildTaskTitle(goal: string, theme: ThemeTemplate, index: number): string {
+//   const shortGoal = goal.length > 40 ? `${goal.slice(0, 37)}…` : goal;
+//   const task = theme.tasks[index % theme.tasks.length];
+//   return `${task} - ${shortGoal}`;
+// }
+
+
+
+function recurrenceFor(
+  theme: ThemeTemplate,
+  taskIndex: number,
+  weekDays: number,
+): string | undefined {
+  // Tasks are currently disabled for AI/offline plans.
+  return undefined;
 }
 
 /**
- * Generate a structured plan without any external API.
- * Output matches GeneratedPlan for existing routes/DB persistence.
+ * Generate a compact structured plan without any external API.
+ *
+ * Important:
+ * - Uses a small number of meaningful milestones.
+ * - Does NOT repeat themes for long goals.
+ * - Tasks are intentionally empty until the mobile app supports
+ *   displaying milestone tasks properly.
+ * - Key actions are included in milestone descriptions.
  */
 export function generateOfflinePlan(input: OfflinePlanInput): GeneratedPlan {
   const durationDays = clamp(Math.round(input.durationDays), 7, 365);
@@ -317,53 +419,71 @@ export function generateOfflinePlan(input: OfflinePlanInput): GeneratedPlan {
   const category = inferCategory(input);
   const themes = CATEGORY_TEMPLATES[category];
 
-  const weekCount = Math.max(1, Math.ceil(durationDays / 7));
+  /*
+   * Keep offline plans compact.
+   *
+   * Short goals get fewer phases.
+   * Longer goals can use up to 4 meaningful phases,
+   * but phases are never repeated.
+   */
+  const milestoneCount =
+    durationDays <= 14
+      ? 2
+      : durationDays <= 30
+        ? 3
+        : Math.min(4, themes.length);
+
   const start = new Date();
   start.setHours(0, 0, 0, 0);
 
   const milestones: GeneratedMilestone[] = [];
   const tasks: GeneratedTask[] = [];
+
+  /*
+   * Divide the goal duration across the selected phases.
+   *
+   * Example for 90 days / 4 milestones:
+   * ~23 days / ~22 days / ~23 days / ~22 days
+   */
+  const baseDays = Math.floor(durationDays / milestoneCount);
+  const extraDays = durationDays % milestoneCount;
+
   let dayOffset = 0;
-  let cumulativeMilestoneDays = 0;
 
-  for (let w = 0; w < weekCount; w++) {
-    const theme = themes[w % themes.length];
-    const daysInWeek =
-      w === weekCount - 1 ? durationDays - w * 7 : Math.min(7, durationDays - w * 7);
-    const weekDays = clamp(daysInWeek, 1, 7);
-    cumulativeMilestoneDays += weekDays;
+  for (let i = 0; i < milestoneCount; i++) {
+    const theme = themes[i];
 
-    const milestoneEndOffset = Math.min(cumulativeMilestoneDays - 1, durationDays - 1);
+    const phaseDays = baseDays + (i < extraDays ? 1 : 0);
+
+    const milestoneEndOffset = Math.min(
+      dayOffset + phaseDays - 1,
+      durationDays - 1,
+    );
+
+    /*
+     * Put the most useful actions directly into the description.
+     * This temporarily replaces visible task support in the mobile app.
+     */
+    const actionSummary = theme.tasks
+      .slice(0, 4)
+      .join('; ');
 
     milestones.push({
-      title: `Week ${w + 1}: ${theme.title}`,
-      durationDays: weekDays,
+      title: theme.title,
+      durationDays: phaseDays,
       targetDate: addDays(start, milestoneEndOffset),
-      description: `${theme.focus} for "${goal}".`,
+      description: `${theme.focus}. Key actions: ${actionSummary}.`,
       tasks: [],
     });
 
-    const tasksPerWeek = clamp(Math.floor(hoursPerDay / 2) + 1, 2, 5);
-    const sessionMinutes = clamp(Math.round((hoursPerDay * 60) / tasksPerWeek), 30, 180);
-
-    for (let t = 0; t < tasksPerWeek; t++) {
-      const offsetInWeek = Math.floor((t / tasksPerWeek) * (weekDays - 1));
-      const dueOffsetDays = dayOffset + offsetInWeek;
-
-      if (dueOffsetDays >= durationDays) break;
-
-      const taskTitles = buildTaskTitle(goal, theme, t);
-      tasks.push({
-        title: taskTitles,
-        milestoneIndex: w,
-        dueOffsetDays,
-        durationMinutes: sessionMinutes,
-        recurrence: recurrenceFor(theme, t, weekDays),
-        description: `~${sessionMinutes} min · ${hoursPerDay}h/day budget · ${category} plan`,
-      });
-    }
-
-    dayOffset += weekDays;
+    /*
+     * No generated tasks for now.
+     *
+     * The mobile app currently does not render milestone tasks,
+     * so generating them only increases AI/backend payload size
+     * without giving the user value.
+     */
+    dayOffset += phaseDays;
   }
 
   logger.info('[AI OFFLINE MODE USED]', {
@@ -371,22 +491,15 @@ export function generateOfflinePlan(input: OfflinePlanInput): GeneratedPlan {
     durationDays,
     hoursPerDay,
     category,
-    weeks: weekCount,
     milestones: milestones.length,
-    tasks: tasks.length,
+    tasks: 0,
   });
 
   return {
     milestones,
     tasks,
     notes:
-      `Plan generated locally (offline mode) as a ${category} plan for "${goal}" over ${durationDays} days ` +
-      `at ~${hoursPerDay}h/day. Adjust tasks to fit your schedule.`,
+      `Offline ${category} plan for "${goal}" over ${durationDays} days ` +
+      `at ~${hoursPerDay}h/day.`,
   };
-}
-
-function buildTaskTitle(goal: string, theme: ThemeTemplate, index: number): string {
-  const shortGoal = goal.length > 40 ? `${goal.slice(0, 37)}…` : goal;
-  const task = theme.tasks[index % theme.tasks.length];
-  return `${task} - ${shortGoal}`;
 }

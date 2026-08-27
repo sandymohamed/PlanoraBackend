@@ -10,6 +10,7 @@ import {
   AuthenticationError,
   ConflictError,
 } from "../../shared/types";
+import { admin } from "../../infrastructure/queue/pushNotification.service";
 
 const SALT_ROUNDS = 12;
 
@@ -185,10 +186,17 @@ export class AuthService {
       throw new AuthenticationError();
     }
 
+    if (!user.passwordHash) {
+      throw new AuthenticationError(
+        "This account uses Google sign-in. Continue with Google.",
+      );
+    }
+
     const isValidPassword = await bcrypt.compare(
       data.password,
       user.passwordHash,
     );
+
     if (!isValidPassword) {
       throw new AuthenticationError();
     }
@@ -220,6 +228,150 @@ export class AuthService {
       });
     }
 
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        timezone: user.timezone,
+        settings: user.settings,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+      tokens,
+    };
+  }
+
+  static async loginWithGoogle(
+    idToken: string,
+    timezone?: string,
+  ): Promise<{ user: any; tokens: AuthTokens }> {
+    if (!admin) {
+      throw new AuthenticationError("Google authentication is unavailable");
+    }
+
+    const prisma = getPrismaClient();
+
+    // 1. Verify the Firebase ID token.
+    // This gives us a trusted Firebase UID and email.
+    let decodedToken;
+
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (error: any) {
+      logger.warn("Google ID token verification failed", {
+        error: error?.message,
+      });
+
+      throw new AuthenticationError("Invalid Google authentication token");
+    }
+
+    const firebaseUid = decodedToken.uid;
+    const email = decodedToken.email?.toLowerCase();
+
+    if (!firebaseUid) {
+      throw new AuthenticationError("Google account identity is missing");
+    }
+
+    if (!email) {
+      throw new AuthenticationError("Google account has no email");
+    }
+
+    // 2. First look for an account already linked to this Firebase UID.
+    let user = await prisma.user.findUnique({
+      where: { firebaseUid },
+    });
+
+    // 3. If Google isn't linked yet, look for an existing Planora
+    // account using the verified Google email.
+    if (!user) {
+      user = await prisma.user.findUnique({
+        where: { email },
+      });
+      
+      if (user) {
+        // Existing email/password account:
+        // automatically link the Google account to it.
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            firebaseUid,
+          },
+        });
+        
+        logger.info("Google account linked to existing user", {
+          userId: user.id,
+          email: user.email,
+          firebaseUid,
+        });
+      }
+    }
+
+    // 4. No existing Planora account → create a Google-only account.
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email,
+          passwordHash: null,
+          firebaseUid,
+          name: decodedToken.name || null,
+          timezone: timezone || "UTC",
+          settings: {
+            notifications: {
+              pushNotifications: true,
+              emailNotifications: false,
+              taskReminders: true,
+              goalReminders: true,
+              projectInvitations: true,
+              taskAssignments: true,
+              taskComments: true,
+              dueDateReminders: true,
+              weeklyDigest: false,
+              monthlyReport: false,
+              marketingEmails: false,
+            },
+            theme: "system",
+            language: "en",
+          },
+        },
+      });
+
+      logger.info("User created with Google authentication", {
+        userId: user.id,
+        email: user.email,
+        firebaseUid,
+      });
+    }
+
+    // 5. Generate the same Planora JWT tokens used by normal login.
+    const tokens = this.generateTokens(user.id, user.email);
+
+    // 6. Store the refresh token using the same hashing strategy.
+    const refreshExpiresAt = AuthService.refreshExpiresAt();
+    
+    await prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        token: AuthService.hashRefreshToken(tokens.refreshToken),
+        expiresAt: refreshExpiresAt,
+      },
+    });
+
+    // 7. Keep only the latest 5 refresh-token sessions,
+    // matching the normal login() behavior.
+    const oldTokens = await prisma.refreshToken.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      skip: 4,
+    });
+
+    if (oldTokens.length > 0) {
+      await prisma.refreshToken.deleteMany({
+        where: {
+          id: { in: oldTokens.map((token) => token.id) },
+        },
+      });
+    }
 
     return {
       user: {
@@ -256,7 +408,6 @@ export class AuthService {
     }
 
     if (!tokenRecord) {
-    
       throw new AuthenticationError("Invalid refresh token");
     }
 
@@ -373,6 +524,12 @@ export class AuthService {
     }
 
     // Verify current password
+    if (!user.passwordHash) {
+      throw new AuthenticationError(
+        "This account uses Google sign-in and does not have a password.",
+      );
+    }
+
     const isValidPassword = await bcrypt.compare(
       currentPassword,
       user.passwordHash,
@@ -404,13 +561,11 @@ export class AuthService {
 
     const { emailService } = await import("./email.service");
 
-
     // Find user by email
     const user = await prisma.user.findUnique({
       where: { email },
       select: { id: true, email: true, name: true },
     });
- 
 
     // Don't reveal if user exists or not (security best practice)
     if (!user) {
@@ -457,7 +612,6 @@ export class AuthService {
       });
       throw error;
     }
- 
 
     // Send OTP email. Keep the API response generic, but log delivery failures
     // so deployment SMTP issues are visible without exposing account existence.
@@ -467,7 +621,7 @@ export class AuthService {
       otp,
       name: user.name || undefined,
     });
- 
+
     if (emailSent) {
       return;
     }

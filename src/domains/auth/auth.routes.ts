@@ -103,6 +103,38 @@ router.post(
   })
 );
 
+const googleLoginSchema = Joi.object({
+  idToken: Joi.string().required(),
+  timezone: Joi.string().optional(),
+});
+// POST /api/v1/auth/google
+router.post(
+  '/google',
+  asyncHandler(async (req: Request, res: Response) => {
+    logger.info('Google authentication request', {
+      ip: req.ip,
+    });
+
+    const { error, value } = googleLoginSchema.validate(req.body);
+
+    if (error) {
+      throw new ValidationError(error.details[0].message);
+    }
+
+    const result = await AuthService.loginWithGoogle(
+      value.idToken,
+      value.timezone,
+    );
+    logger.info('google singin result: ', result);
+
+    res.json({
+      success: true,
+      data: result,
+      message: 'Google login successful',
+    });
+  }),
+);
+
 // POST /api/v1/auth/refresh
 router.post(
   '/refresh',

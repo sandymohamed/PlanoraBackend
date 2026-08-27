@@ -13,7 +13,8 @@ datasource db {
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
-  passwordHash String   @map("password_hash")
+  passwordHash String?  @map("password_hash")
+  firebaseUid  String?  @unique @map("firebase_uid")  
   name         String?
   timezone     String   @default("UTC")
   settings     Json?

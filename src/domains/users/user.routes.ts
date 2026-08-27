@@ -3,9 +3,9 @@ import Joi from "joi";
 import bcrypt from "bcryptjs";
 import { getPrismaClient } from "../../shared/utils/database";
 import { authenticateToken } from "../../shared/middleware/auth";
-import { AuthenticatedRequest, ValidationError } from "../../shared/types";
+import { AuthenticatedRequest, AuthenticationError, ValidationError } from "../../shared/types";
 import { logger } from "../../shared/utils/logger";
-import { migrateNotificationSettings } from '../../shared/utils/migrateNotificationSettings';
+import { migrateNotificationSettings } from "../../shared/utils/migrateNotificationSettings";
 
 const router = Router();
 
@@ -213,7 +213,11 @@ router.post(
           error: "User not found",
         });
       }
-
+      if (!user.passwordHash) {
+        throw new AuthenticationError(
+          "This account uses Google sign-in and does not have a password.",
+        );
+      }
       // Verify current password
       const isPasswordValid = await bcrypt.compare(
         currentPassword,

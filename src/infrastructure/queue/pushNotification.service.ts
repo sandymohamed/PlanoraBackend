@@ -199,3 +199,4 @@ class PushNotificationService {
 }
 
 export const pushNotificationService = PushNotificationService.getInstance();
+export { admin };

@@ -122,6 +122,10 @@ export class OpenRouterProvider implements AIProvider {
     const choice = envelope.choices?.[0];
     const content = choice?.message?.content;
 
+    logger.info("[AI RAW CONTENT]", {
+      contentLength: content?.length,
+    });
+    
     if (!content || !content.trim()) {
       throw new AIProviderError("Empty response from provider", true);
     }

@@ -286,14 +286,6 @@ async function processReminderJob(job: Job): Promise<void> {
       return;
     }
 
-    logger.info(`Reminder found: ${reminderId}`, {
-      title: reminder.title,
-      note: reminder.note,
-      targetType: reminder.targetType,
-      targetId: reminder.targetId,
-      schedule: reminder.schedule,
-    });
-
     // Check user notification preferences
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -303,15 +295,6 @@ async function processReminderJob(job: Job): Promise<void> {
     const settings = (user?.settings as any) || {};
     const notificationSettings = settings.notifications || {};
 
-    logger.info("Notification settings check for reminder", {
-      userId,
-      type,
-      reminderId,
-      pushNotifications: notificationSettings.pushNotifications,
-      routineReminders: notificationSettings.routineReminders,
-      targetType: reminder.targetType,
-      targetId: reminder.targetId,
-    });
 
     // Check if push notifications are enabled and if reminder type is enabled
     // Default to true (enabled) unless explicitly set to false
@@ -386,29 +369,11 @@ async function processReminderJob(job: Job): Promise<void> {
         (!routine || !routine.enabled || routine.userId !== userId)
       ) {
         shouldSendPush = false;
-        logger.info(
-          "Push notification skipped: routine is disabled or not found",
-          {
-            type,
-            userId,
-            reminderId,
-            routineId,
-            taskId: schedule?.taskId,
-            routineEnabled: routine?.enabled,
-            routineExists: !!routine,
-          },
-        );
+     
 
         // Cancel the reminder if routine is disabled
         if (!routine || !routine.enabled) {
-          logger.info(
-            `Skipping reschedule for reminder ${reminderId}: routine is disabled`,
-            {
-              reminderId,
-              routineId,
-              enabled: routine?.enabled,
-            },
-          );
+      
           // Cancel the reminder if routine is disabled
           await prisma.reminder
             .delete({
@@ -424,23 +389,10 @@ async function processReminderJob(job: Job): Promise<void> {
         }
       }
 
-      // Log when routine reminders are enabled
-      logger.debug("Routine reminder notification enabled", {
-        type,
-        userId,
-        reminderId,
-        routineReminders: notificationSettings.routineReminders,
-      });
     }
 
     // Send push notification if enabled
     if (shouldSendPush && pushNotificationService.isAvailable()) {
-      logger.info(`Sending push notification for reminder ${reminderId}`, {
-        userId,
-        type,
-        title: reminder.title,
-        body: reminder.note,
-      });
       // Prepare data payload (FCM requires all data values to be strings)
       const notificationData: { [key: string]: string } = {
         reminderId: String(reminderId),
@@ -470,27 +422,14 @@ async function processReminderJob(job: Job): Promise<void> {
         },
         false, // Already checked preferences above
       );
-      logger.info(`Push notification res: ${JSON.stringify(res)}`);
-      logger.info(
-        `Push notification sent successfully for reminder ${reminderId}`,
-      );
-    } else {
-      logger.warn(`Push notification not sent for reminder ${reminderId}`, {
-        shouldSendPush,
-        isAvailable: pushNotificationService.isAvailable(),
-        type,
-      });
+
     }
 
     // Schedule next occurrence if recurring-like schedule is present
     try {
       const schedule: any = reminder.schedule as any;
       const frequency = schedule.frequency;
-      logger.debug("Attempting to reschedule reminder", {
-        reminderId,
-        schedule,
-        type,
-      });
+   
       // Expected minimal schedule formats:
       // { frequency: 'DAILY', time: 'HH:mm' }
       // { frequency: 'WEEKLY', time: 'HH:mm', days: [0-6] } // 0=Sunday
@@ -502,7 +441,6 @@ async function processReminderJob(job: Job): Promise<void> {
 
       // For routine reminders, calculate next reminder time (routine time - reminderBefore)
       let next: Date | null = null;
-      logger.info(`next 1: ${next}`);
       if (type === "ROUTINE_REMINDER" && schedule.reminderBefore) {
         // Check if routine is still enabled before rescheduling
         if (schedule.routineId) {
@@ -512,15 +450,6 @@ async function processReminderJob(job: Job): Promise<void> {
           });
 
           if (!routine || !routine.enabled || routine.userId !== userId) {
-            logger.info(
-              `Skipping reschedule for reminder ${reminderId}: routine is disabled or not found`,
-              {
-                reminderId,
-                routineId: schedule.routineId,
-                enabled: routine?.enabled,
-                routineExists: !!routine,
-              },
-            );
             // Cancel the reminder if routine is disabled
             await prisma.reminder
               .delete({
@@ -545,7 +474,7 @@ async function processReminderJob(job: Job): Promise<void> {
             const [, valueStr, unit] = match;
             const value = parseInt(valueStr, 10);
             next = new Date(routineNext);
-            logger.info(`next 2: ${next}`);
+       
             if (unit === "m") {
               next.setMinutes(next.getMinutes() - value);
             } else if (unit === "h") {
@@ -555,19 +484,11 @@ async function processReminderJob(job: Job): Promise<void> {
             } else if (unit === "w") {
               next.setDate(next.getDate() - value * 7);
             }
-            logger.info(`next 3: ${next}`);
+        
             // If the calculated reminder time is in the past, calculate the next one
             const now = new Date();
             if (next <= now) {
-              logger.info(
-                `Calculated reminder time is in the past, calculating next occurrence`,
-                {
-                  reminderId,
-                  calculatedTime: next.toISOString(),
-                  now: now.toISOString(),
-                },
-              );
-
+            
               // Calculate the next routine occurrence after the current one
               // We need to find the next routine occurrence that gives us a future reminder time
               const nextRoutineOccurrence = new Date(routineNext);
@@ -611,7 +532,7 @@ async function processReminderJob(job: Job): Promise<void> {
 
                 // Recalculate reminder time from new routine occurrence
                 next = new Date(nextRoutineOccurrence);
-                logger.info(`next 4: ${next}`);
+               
                 if (unit === "m") {
                   next.setMinutes(next.getMinutes() - value);
                 } else if (unit === "h") {
@@ -622,7 +543,7 @@ async function processReminderJob(job: Job): Promise<void> {
                   next.setDate(next.getDate() - value * 7);
                 }
               }
-              logger.info(`next 5: ${next}`);
+          
 
               if (next <= now) {
                 logger.warn(
@@ -645,41 +566,18 @@ async function processReminderJob(job: Job): Promise<void> {
                 );
               }
             }
-            logger.info(`next 6: ${next}`);
-            if (next) {
-              logger.info(`next 7: ${next}`);
-              logger.info(
-                `Calculated next reminder time for routine reminder`,
-                {
-                  reminderId,
-                  routineNext: routineNext.toISOString(),
-                  reminderBefore: schedule.reminderBefore,
-                  reminderTime: next.toISOString(),
-                },
-              );
-            }
+       
           }
         }
       } else {
-        logger.info(`Calculating next occurrence for non-routine reminder ${reminderId}`, {
-          type,
-          schedule,
-        });
         // For other reminder types, use routine occurrence directly
         next = calculateNextOccurrence(frequency,schedule, scheduleTimezone);
-        logger.info(`next 8: ${next}`);
+     
       }
 
       if (next) {
         await scheduleReminder(reminderId, userId, next, type);
-        logger.info(
-          `Rescheduled recurring reminder ${reminderId} for ${next.toISOString()}`,
-          {
-            type,
-            schedule,
-            nextOccurrence: next.toISOString(),
-          },
-        );
+     
       } else {
         logger.warn(`Could not compute next occurrence at Next: ${next}`);
 
@@ -698,7 +596,6 @@ async function processReminderJob(job: Job): Promise<void> {
       );
     }
 
-    logger.info(`Reminder job completed: ${reminderId}`);
   } catch (error) {
     logger.error(`Reminder job failed: ${reminderId}`, error);
     throw error;
@@ -707,8 +604,6 @@ async function processReminderJob(job: Job): Promise<void> {
 
 async function processNotificationJob(job: Job): Promise<void> {
   const { notificationId, userId, type } = job.data;
-
-  logger.info(`Processing notification job: ${notificationId}`);
 
   try {
     const { pushNotificationService } =
@@ -939,9 +834,7 @@ export const scheduleReminder = async (
   scheduledFor: Date,
   type: string = "time",
 ): Promise<Job> => {
-  logger.info(
-    `Scheduling reminder job: ${reminderId} for user: ${userId} at ${scheduledFor.toISOString()} with type: ${type}`,
-  );
+
   const delay = scheduledFor.getTime() - Date.now();
   if (delay <= 0) {
     throw new Error("Cannot schedule reminder in the past");

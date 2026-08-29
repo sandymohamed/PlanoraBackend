@@ -470,46 +470,210 @@ class AIService {
     return { plan, provider: result };
   }
 
-  private parseResponse(content: string): GeneratedPlan {
-    try {
-      let jsonString = "";
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        jsonString = jsonMatch[0];
-      } else {
-        const arrayMatch = content.match(/\[[\s\S]*\]/);
-        if (arrayMatch) {
-          jsonString = `{"data": ${arrayMatch[0]}}`;
-        } else {
-          throw new Error("No JSON found in response");
-        }
+  private extractBalancedJson(content: string): string | null {
+  const start = content.indexOf("{");
+
+  if (start === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < content.length; i++) {
+    const char = content[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === "{") {
+      depth++;
+    }
+
+    if (char === "}") {
+      depth--;
+
+      if (depth === 0) {
+        return content.slice(start, i + 1);
       }
-
-      let cleanedJson = jsonString
-        .replace(/,(\s*[}\]])/g, "$1")
-        .replace(/'/g, '"');
-
-      let parsed;
-      try {
-        parsed = JSON.parse(cleanedJson);
-      } catch {
-        parsed = JSON.parse(jsonString);
-      }
-
-      return {
-        milestones: this.validateMilestones(
-          parsed.milestones || parsed.data?.milestones || [],
-        ),
-        tasks: this.validateTasks(parsed.tasks || parsed.data?.tasks || []),
-        notes: parsed.notes || parsed.data?.notes || "",
-      };
-    } catch (error) {
-      logger.error("Failed to parse AI response:", error);
-      throw new Error(
-        `Invalid response format from AI: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
     }
   }
+
+  return null;
+}
+
+ private parseResponse(content: string): GeneratedPlan {
+  try {
+    if (!content || typeof content !== "string") {
+      throw new Error("AI response is empty");
+    }
+
+    const raw = content.trim();
+
+    logger.info("[AI PARSE] Starting", {
+      contentLength: raw.length,
+      preview: raw.substring(0, 1000),
+    });
+
+    let parsed: any = null;
+
+    // ---------------------------------------------------------
+    // 1. Try pure JSON first
+    // ---------------------------------------------------------
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Expected if provider returned markdown/explanation.
+    }
+
+    // ---------------------------------------------------------
+    // 2. Try ```json ... ``` or ``` ... ```
+    // ---------------------------------------------------------
+    if (!parsed) {
+      const fencedMatch = raw.match(
+        /```(?:json)?\s*([\s\S]*?)\s*```/i,
+      );
+
+      if (fencedMatch) {
+        try {
+          parsed = JSON.parse(fencedMatch[1].trim());
+        } catch {
+          // Continue to extraction.
+        }
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 3. Extract first balanced JSON object
+    // ---------------------------------------------------------
+    if (!parsed) {
+      const jsonObject = this.extractBalancedJson(raw);
+
+      if (jsonObject) {
+        try {
+          parsed = JSON.parse(jsonObject);
+        } catch {
+          // Continue to final failure.
+        }
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 4. Nothing usable
+    // ---------------------------------------------------------
+    if (!parsed) {
+      throw new Error("No valid JSON found in AI response");
+    }
+
+    // ---------------------------------------------------------
+    // 5. Normalize possible wrapper structures
+    // ---------------------------------------------------------
+    const data =
+      parsed.data && typeof parsed.data === "object"
+        ? parsed.data
+        : parsed;
+
+    // ---------------------------------------------------------
+    // 6. Validate structure before accessing fields
+    // ---------------------------------------------------------
+    const milestones = Array.isArray(data.milestones)
+      ? data.milestones
+      : [];
+
+    const tasks = Array.isArray(data.tasks)
+      ? data.tasks
+      : [];
+
+    const notes =
+      typeof data.notes === "string"
+        ? data.notes
+        : "";
+
+    // ---------------------------------------------------------
+    // 7. Return normalized plan
+    // ---------------------------------------------------------
+    return {
+      milestones: this.validateMilestones(milestones),
+      tasks: this.validateTasks(tasks),
+      notes,
+    };
+  } catch (error) {
+    logger.error("[AI PARSE FAILED]", {
+      error: error instanceof Error
+        ? error.message
+        : String(error),
+      content: content ?? "",
+      contentLength: content?.length ?? 0,
+      contentPreview: content?.substring(0, 2000),
+    });
+
+    throw new Error(
+      `Invalid response format from AI: ${
+        error instanceof Error
+          ? error.message
+          : "Unknown error"
+      }`,
+    );
+  }
+}
+
+  // private parseResponse(content: string): GeneratedPlan {
+  //   try {
+  //     let jsonString = "";
+  //     const jsonMatch = content.match(/\{[\s\S]*\}/);
+  //     if (jsonMatch) {
+  //       jsonString = jsonMatch[0];
+  //     } else {
+  //       const arrayMatch = content.match(/\[[\s\S]*\]/);
+  //       if (arrayMatch) {
+  //         jsonString = `{"data": ${arrayMatch[0]}}`;
+  //       } else {
+  //         throw new Error("No JSON found in response");
+  //       }
+  //     }
+
+  //     let cleanedJson = jsonString
+  //       .replace(/,(\s*[}\]])/g, "$1")
+  //       .replace(/'/g, '"');
+
+  //     let parsed;
+  //     try {
+  //       parsed = JSON.parse(cleanedJson);
+  //     } catch {
+  //       parsed = JSON.parse(jsonString);
+  //     }
+
+  //     return {
+  //       milestones: this.validateMilestones(
+  //         parsed.milestones || parsed.data?.milestones || [],
+  //       ),
+  //       tasks: this.validateTasks(parsed.tasks || parsed.data?.tasks || []),
+  //       notes: parsed.notes || parsed.data?.notes || "",
+  //     };
+  //   } catch (error) {
+  //     logger.error("Failed to parse AI response:", error);
+  //     throw new Error(
+  //       `Invalid response format from AI: ${error instanceof Error ? error.message : "Unknown error"}`,
+  //     );
+  //   }
+  // }
 
   private validateMilestones(milestones: any[]): GeneratedMilestone[] {
     return milestones.map((milestone, index) => ({

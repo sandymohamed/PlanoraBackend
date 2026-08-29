@@ -445,6 +445,13 @@ class AIService {
       jsonMode: true,
     });
 
+    logger.info("[AI RESPONSE RECEIVED]", {
+      provider: result.provider,
+      model: result.model,
+      finishReason: result.finishReason,
+      usage: result.usage,
+      contentLength: result.content?.length,
+    });
     const plan = this.parseResponse(result.content);
 
     logger.info("[AI PROVIDER SUCCESS]", {

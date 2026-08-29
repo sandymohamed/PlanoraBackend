@@ -30,6 +30,7 @@ export interface ChatCompletionResult {
   content: string;
   model: string;
   provider: string;
+  finishReason?:string; // recently added
   /** True when the fallback model answered after the primary failed */
   fallbackUsed: boolean;
   latencyMs: number;
